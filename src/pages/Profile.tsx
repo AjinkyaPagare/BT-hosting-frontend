@@ -17,7 +17,7 @@ const Profile = () => {
 
   return (
     <div className="h-full overflow-y-auto bg-background">
-      <div className="p-6 border-b border-border bg-card">
+      <div className="border-b border-border bg-card pr-4 pl-16 py-4 md:p-6">
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-bold">Profile</h2>
           <Button

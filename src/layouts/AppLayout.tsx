@@ -9,35 +9,32 @@ import {
   Bell,
   Settings as SettingsIcon,
   User,
-  Search,
   Menu,
   X,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 const navigation = [
-  { name: "Chats", href: "/chats", icon: MessageSquare },
-  { name: "Groups", href: "/groups", icon: Users },
-  { name: "Calendar", href: "/calendar", icon: CalendarIcon },
-  { name: "Files", href: "/files", icon: FolderOpen },
-  { name: "Friends", href: "/friends", icon: UserPlus },
-  { name: "Notifications", href: "/notifications", icon: Bell },
-  { name: "Settings", href: "/settings", icon: SettingsIcon },
+  { name: "Chats", href: "/app/chats", icon: MessageSquare },
+  { name: "Groups", href: "/app/groups", icon: Users },
+  { name: "Calendar", href: "/app/calendar", icon: CalendarIcon },
+  { name: "Files", href: "/app/files", icon: FolderOpen },
+  { name: "Friends", href: "/app/friends", icon: UserPlus },
+  { name: "Notifications", href: "/app/notifications", icon: Bell },
+  { name: "Settings", href: "/app/settings", icon: SettingsIcon },
 ];
 
 const AppLayout = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
   const location = useLocation();
 
   useEffect(() => {
     const token = localStorage.getItem("authToken");
     setIsAuthenticated(!!token);
-  }, []);
+  }, [location]);
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
@@ -48,7 +45,7 @@ const AppLayout = () => {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background">
+    <div className="flex w-full bg-background min-h-screen md:h-screen md:overflow-hidden">
       {/* Mobile Menu Button */}
       <Button
         variant="ghost"
@@ -61,26 +58,16 @@ const AppLayout = () => {
 
       {/* Sidebar */}
       <aside
-        className={`fixed md:static inset-y-0 left-0 z-40 w-64 transform bg-sidebar border-r border-sidebar-border transition-transform duration-200 ease-in-out ${
+        className={`fixed md:static inset-y-0 left-0 z-40 w-56 md:w-20 transform bg-sidebar border-r border-sidebar-border transition-transform duration-200 ease-in-out ${
           isMobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         }`}
       >
         <div className="flex h-full flex-col">
           {/* Logo */}
-          <div className="flex h-16 items-center justify-center border-b border-sidebar-border px-6">
-            <h1 className="text-xl font-bold text-primary">Baap_Teams</h1>
-          </div>
-
-          {/* Global Search */}
-          <div className="p-4 border-b border-sidebar-border">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
+          <div className="flex h-16 items-center justify-center border-b border-sidebar-border px-4">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <MessageSquare className="h-5 w-5" />
+              <span className="sr-only">Baap Teams</span>
             </div>
           </div>
 
@@ -90,36 +77,36 @@ const AppLayout = () => {
               <NavLink
                 key={item.name}
                 to={item.href}
-                className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                activeClassName="bg-sidebar-accent text-sidebar-primary font-semibold"
+                className="flex items-center justify-start rounded-lg px-2 py-2 text-sidebar-foreground transition-colors border border-transparent hover:bg-primary/10"
+                activeClassName="border-primary bg-primary/15 text-primary font-semibold shadow-sm"
+                title={item.name}
+                aria-label={item.name}
+                end
               >
                 <item.icon className="h-5 w-5" />
-                {item.name}
+                <span className="sr-only">{item.name}</span>
               </NavLink>
             ))}
           </nav>
 
           {/* User Profile */}
           <div className="border-t border-sidebar-border p-4">
-            <NavLink
-              to="/profile"
-              className="flex items-center gap-3 rounded-lg p-2 hover:bg-sidebar-accent transition-colors"
-            >
-              <Avatar className="h-9 w-9">
-                <AvatarImage src="" />
-                <AvatarFallback className="bg-primary text-primary-foreground">
-                  <User className="h-5 w-5" />
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-sidebar-foreground truncate">
-                  Your Name
-                </p>
-                <p className="text-xs text-muted-foreground truncate">
-                  View profile
-                </p>
-              </div>
-            </NavLink>
+            <div className="flex items-center gap-2">
+              <NavLink
+                to="/app/profile"
+                className="flex flex-1 items-center justify-center rounded-lg p-2 text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                title="Profile"
+                aria-label="Profile"
+              >
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src="" />
+                  <AvatarFallback className="bg-primary text-primary-foreground">
+                    <User className="h-5 w-5" />
+                  </AvatarFallback>
+                </Avatar>
+                <span className="sr-only">View profile</span>
+              </NavLink>
+            </div>
           </div>
         </div>
       </aside>
@@ -127,13 +114,13 @@ const AppLayout = () => {
       {/* Mobile Overlay */}
       {isMobileMenuOpen && (
         <div
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm md:hidden"
           onClick={() => setIsMobileMenuOpen(false)}
         />
       )}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-y-auto md:overflow-hidden">
         <Outlet />
       </main>
     </div>

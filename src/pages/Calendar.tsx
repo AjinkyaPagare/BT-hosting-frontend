@@ -44,7 +44,7 @@ const Calendar = () => {
   return (
     <div className="h-full flex flex-col md:flex-row bg-background">
       {/* Calendar */}
-      <div className="flex-1 p-6 border-r border-border">
+      <div className="flex-1 border-r border-border pr-6 pl-16 py-6 md:p-6">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-2xl font-bold">
             {format(currentDate, "MMMM yyyy")}
@@ -95,7 +95,7 @@ const Calendar = () => {
 
       {/* Events Sidebar */}
       <div className="w-full md:w-96 flex flex-col bg-card">
-        <div className="p-4 border-b border-border">
+        <div className="border-b border-border pr-4 pl-16 py-4 md:p-4">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">
               {format(selectedDate, "MMMM d, yyyy")}

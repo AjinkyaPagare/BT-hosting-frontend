@@ -3,14 +3,15 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { useState } from "react";
+import { useTheme } from "@/context/ThemeContext";
 
 const Settings = () => {
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const { theme, setTheme } = useTheme();
+  const isDarkMode = theme === "dark";
 
   return (
     <div className="h-full overflow-y-auto bg-background">
-      <div className="p-6 border-b border-border bg-card">
+      <div className="border-b border-border bg-card pr-4 pl-16 py-4 md:p-6">
         <h2 className="text-2xl font-bold">Settings</h2>
       </div>
 
@@ -27,7 +28,7 @@ const Settings = () => {
                   <p className="text-sm text-muted-foreground">Toggle dark mode theme</p>
                 </div>
               </div>
-              <Switch checked={isDarkMode} onCheckedChange={setIsDarkMode} />
+              <Switch checked={isDarkMode} onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")} />
             </div>
           </div>
         </div>

@@ -26,7 +26,7 @@ const Friends = () => {
 
   return (
     <div className="h-full flex flex-col bg-background">
-      <div className="p-4 border-b border-border bg-card">
+      <div className="border-b border-border bg-card pr-4 pl-16 py-4 md:p-4">
         <h2 className="text-2xl font-bold mb-4">Friends</h2>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -40,16 +40,16 @@ const Friends = () => {
       </div>
 
       <Tabs defaultValue="all" className="flex-1 flex flex-col">
-        <TabsList className="mx-4 mt-4">
-          <TabsTrigger value="all" className="flex-1">
+        <TabsList className="mx-4 mt-4 grid grid-cols-3 gap-2 rounded-md bg-card/60 p-1 md:flex md:gap-2 md:bg-transparent md:p-0">
+          <TabsTrigger value="all" className="w-full rounded-md py-2 text-xs font-medium sm:text-sm md:flex-1">
             All Friends
             <Badge variant="secondary" className="ml-2">{mockFriends.length}</Badge>
           </TabsTrigger>
-          <TabsTrigger value="pending" className="flex-1">
+          <TabsTrigger value="pending" className="w-full rounded-md py-2 text-xs font-medium sm:text-sm md:flex-1">
             Pending
             <Badge variant="secondary" className="ml-2">{mockPendingRequests.length}</Badge>
           </TabsTrigger>
-          <TabsTrigger value="sent" className="flex-1">
+          <TabsTrigger value="sent" className="w-full rounded-md py-2 text-xs font-medium sm:text-sm md:flex-1">
             Sent
             <Badge variant="secondary" className="ml-2">{mockSentRequests.length}</Badge>
           </TabsTrigger>

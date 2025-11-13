@@ -28,7 +28,7 @@ const GroupMedia = () => {
   return (
     <div className="h-full overflow-y-auto bg-background">
       <div className="sticky top-0 z-10 bg-card border-b border-border">
-        <div className="flex items-center gap-4 p-4">
+        <div className="flex items-center gap-4 bg-card pr-4 pl-16 py-4 md:p-4">
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
             <ArrowLeft className="h-5 w-5" />
           </Button>

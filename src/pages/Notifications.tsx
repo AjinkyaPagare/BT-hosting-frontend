@@ -58,7 +58,7 @@ const Notifications = () => {
 
   return (
     <div className="h-full flex flex-col bg-background">
-      <div className="p-4 border-b border-border bg-card">
+      <div className="border-b border-border bg-card pr-4 pl-16 py-4 md:p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h2 className="text-2xl font-bold">Notifications</h2>

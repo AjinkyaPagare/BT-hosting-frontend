@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { VariantProps, cva } from "class-variance-authority";
-import { PanelLeft } from "lucide-react";
+import { MoreHorizontal, PanelLeft } from "lucide-react";
 
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
@@ -286,16 +286,43 @@ SidebarInset.displayName = "SidebarInset";
 
 const SidebarInput = React.forwardRef<React.ElementRef<typeof Input>, React.ComponentProps<typeof Input>>(
   ({ className, ...props }, ref) => {
+    const [showDropdown, setShowDropdown] = React.useState(false);
+
     return (
-      <Input
-        ref={ref}
-        data-sidebar="input"
-        className={cn(
-          "h-8 w-full bg-background shadow-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-          className,
+      <div className="relative">
+        <Input
+          ref={ref}
+          data-sidebar="input"
+          className={cn(
+            "h-8 w-full bg-background shadow-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+            className,
+          )}
+          onFocus={() => setShowDropdown(true)}
+          onBlur={() => setShowDropdown(false)}
+          {...props}
+        />
+        <button
+          className="absolute right-2 top-1/2 -translate-y-1/2"
+          onClick={() => setShowDropdown(!showDropdown)}
+        >
+          <MoreHorizontal size={16} />
+        </button>
+        {showDropdown && (
+          <div className="absolute right-0 mt-2 w-48 rounded-md bg-white shadow-lg">
+            <div className="py-1">
+              <a href="#" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                Filter by name
+              </a>
+              <a href="#" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                Filter by date
+              </a>
+              <a href="#" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                Filter by type
+              </a>
+            </div>
+          </div>
         )}
-        {...props}
-      />
+      </div>
     );
   },
 );
