@@ -17,16 +17,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { groupApi, getCurrentUserId } from "@/services/group_apis";
+import { groupApi } from "@/services/group_apis";
 import { User } from "@/types";
-
-const mockFriends = [
-  { id: "user1", name: "John Doe", email: "john@example.com", isOnline: true },
-  { id: "user2", name: "Jane Smith", email: "jane@example.com", isOnline: false },
-  { id: "user3", name: "Bob Johnson", email: "bob@example.com", isOnline: true },
-  { id: "user4", name: "Alice Brown", email: "alice@example.com", isOnline: true },
-  { id: "user5", name: "Charlie Adams", email: "charlie@example.com", isOnline: false },
-];
+import { useAuth } from "@/context/AuthContext";
+import { friendsService } from "@/services/friends";
 
 const GroupInfo = () => {
   const navigate = useNavigate();
@@ -37,7 +31,7 @@ const GroupInfo = () => {
     description?: string;
     avatar?: string;
     adminIds: string[];
-    members: (User & { isAdmin?: boolean })[];
+    members: (User & { isAdmin?: boolean; role?: "member" | "admin" | string })[];
   } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
@@ -45,8 +39,11 @@ const GroupInfo = () => {
   const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([]);
   const [isAddingMembers, setIsAddingMembers] = useState(false);
   const [isRemovingMember, setIsRemovingMember] = useState<string | null>(null);
+  const [isUpdatingRole, setIsUpdatingRole] = useState<string | null>(null);
+  const [availableFriends, setAvailableFriends] = useState<Array<{ id: string; name: string; email: string; isOnline: boolean }>>([]);
 
-  const currentUserId = getCurrentUserId();
+  const { user } = useAuth();
+  const currentUserId = user?.id;
 
   useEffect(() => {
     if (groupId && currentUserId) {
@@ -54,36 +51,101 @@ const GroupInfo = () => {
     }
   }, [groupId, currentUserId]);
 
+  // Load friends list for adding members
+  useEffect(() => {
+    const loadFriends = async () => {
+      try {
+        const friendsList = await friendsService.getFriendList();
+        const mapped = friendsList
+          .filter((f) => f.id && f.name && f.email)
+          .map((f) => ({
+            id: f.id!,
+            name: f.name!,
+            email: f.email!,
+            isOnline: false, // Friends service doesn't provide online status
+          }));
+        setAvailableFriends(mapped);
+      } catch (error) {
+        console.error("Error loading friends:", error);
+      }
+    };
+
+    loadFriends();
+  }, []);
+
   const fetchGroupDetails = async () => {
     if (!groupId || !currentUserId) return;
 
     setIsLoading(true);
     try {
+      console.log("Fetching group details for:", { userId: currentUserId, groupId });
       const response = await groupApi.getGroupDetails(currentUserId, groupId);
+      console.log("Group details response:", response);
       
       // Map API response to group state
       setGroup({
         name: response.name || response.group_name || "Unknown Group",
         description: response.description,
         avatar: response.avatar,
-        adminIds: response.admin_ids || response.owner_id ? [response.owner_id] : [],
-        members: response.members || response.member_ids?.map((id: string) => {
-          // You might need to fetch user details separately or the API might return full user objects
-          const mockUser = mockFriends.find(f => f.id === id);
-          return {
-            id,
-            name: mockUser?.name || "Unknown User",
-            email: mockUser?.email || "",
-            isOnline: mockUser?.isOnline || false,
-            isAdmin: response.admin_ids?.includes(id) || response.owner_id === id,
-          };
-        }) || [],
+        adminIds: (() => {
+          const base = Array.isArray(response.admin_ids)
+            ? response.admin_ids
+            : (response.admin_ids
+                ? [String(response.admin_ids)]
+                : []);
+          const withOwner = response.owner_id ? Array.from(new Set([...base, response.owner_id])) : base;
+          return withOwner;
+        })(),
+        members: (() => {
+          const normalizedAdminIds = (() => {
+            const base = Array.isArray(response.admin_ids)
+              ? response.admin_ids
+              : (response.admin_ids
+                  ? [String(response.admin_ids)]
+                  : []);
+            const withOwner = response.owner_id ? Array.from(new Set([...base, response.owner_id])) : base;
+            return withOwner;
+          })();
+          if (response.members && Array.isArray(response.members)) {
+            return response.members.map((member: any) => ({
+              id: member.id,
+              name: member.name || "Unknown User",
+              email: member.email || "",
+              isOnline: member.isOnline ?? false,
+              isAdmin: normalizedAdminIds.includes(member.id),
+              role: member.role ?? (normalizedAdminIds.includes(member.id) ? "admin" : "member"),
+            }));
+          }
+          if (response.member_ids && Array.isArray(response.member_ids)) {
+            return response.member_ids.map((id: string) => {
+              // Fallback: if API only returns IDs, try to find in available friends
+              const friend = availableFriends.find(f => f.id === id);
+              return {
+                id,
+                name: friend?.name || "Unknown User",
+                email: friend?.email || "",
+                isOnline: friend?.isOnline ?? false,
+                isAdmin: normalizedAdminIds.includes(id),
+                role: normalizedAdminIds.includes(id) ? "admin" : "member",
+              };
+            });
+          }
+          return [];
+        })(),
       });
     } catch (error: any) {
       console.error("Error fetching group details:", error);
+      console.error("Error response:", error.response?.data);
+      console.error("Error status:", error.response?.status);
+      
+      const errorMessage = error.response?.data?.detail || 
+                          error.response?.data?.message || 
+                          error.message || 
+                          "An error occurred while loading the group.";
+      
       toast({
         title: "Failed to load group",
-        description: error.response?.data?.detail || error.message || "An error occurred while loading the group.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -103,11 +165,15 @@ const GroupInfo = () => {
 
     setIsAddingMembers(true);
     try {
-      await groupApi.addMembers({
+      const requestPayload = {
         user_id: currentUserId,
         group_id: groupId,
         'user_ids to add': selectedFriendIds,
-      });
+      };
+
+      console.log("Adding members with payload:", requestPayload);
+      const response = await groupApi.addMembers(requestPayload);
+      console.log("Add members response:", response);
 
       toast({
         title: "Members added",
@@ -121,9 +187,18 @@ const GroupInfo = () => {
       setFriendQuery("");
     } catch (error: any) {
       console.error("Error adding members:", error);
+      console.error("Error response:", error.response?.data);
+      console.error("Error status:", error.response?.status);
+      
+      const errorMessage = error.response?.data?.detail || 
+                          error.response?.data?.message || 
+                          (Array.isArray(error.response?.data) ? error.response?.data.join(", ") : JSON.stringify(error.response?.data)) ||
+                          error.message || 
+                          "An error occurred while adding members.";
+      
       toast({
         title: "Failed to add members",
-        description: error.response?.data?.detail || error.message || "An error occurred while adding members.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -134,13 +209,27 @@ const GroupInfo = () => {
   const handleRemoveMember = async (memberIdToRemove: string) => {
     if (!groupId || !currentUserId) return;
 
+    // Prevent removing yourself if you're the only admin
+    if (memberIdToRemove === currentUserId && group?.adminIds.length === 1 && group.adminIds[0] === currentUserId) {
+      toast({
+        title: "Cannot remove yourself",
+        description: "You cannot remove yourself as you are the only admin. Please promote another member to admin first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsRemovingMember(memberIdToRemove);
     try {
-      await groupApi.removeMember({
+      const requestPayload = {
         user_id: currentUserId,
         group_id: groupId,
         'user_id to remove': memberIdToRemove,
-      });
+      };
+
+      console.log("Removing member with payload:", requestPayload);
+      const response = await groupApi.removeMember(requestPayload);
+      console.log("Remove member response:", response);
 
       toast({
         title: "Member removed",
@@ -151,9 +240,18 @@ const GroupInfo = () => {
       await fetchGroupDetails();
     } catch (error: any) {
       console.error("Error removing member:", error);
+      console.error("Error response:", error.response?.data);
+      console.error("Error status:", error.response?.status);
+      
+      const errorMessage = error.response?.data?.detail || 
+                          error.response?.data?.message || 
+                          (Array.isArray(error.response?.data) ? error.response?.data.join(", ") : JSON.stringify(error.response?.data)) ||
+                          error.message || 
+                          "An error occurred while removing the member.";
+      
       toast({
         title: "Failed to remove member",
-        description: error.response?.data?.detail || error.message || "An error occurred while removing the member.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -161,7 +259,102 @@ const GroupInfo = () => {
     }
   };
 
-  const filteredFriends = mockFriends.filter((friend) => {
+  const handleUpdateMemberRole = async (targetUserId: string, newRole: string) => {
+    if (!groupId || !currentUserId || !group) return;
+
+    const currentMember = group.members.find((m) => m.id === targetUserId);
+    if (!currentMember || currentMember.role === newRole) return;
+
+    const previousRole = currentMember.role ?? "member";
+
+    // Optimistic update
+    setGroup((prev) => {
+      if (!prev) return prev;
+      const isBecomingAdmin = newRole === "admin";
+      const prevAdminIds = Array.isArray(prev.adminIds) ? prev.adminIds : [];
+      const wasAdmin = prevAdminIds.includes(targetUserId);
+      const nextAdminIds = isBecomingAdmin
+        ? (wasAdmin ? prevAdminIds : [...prevAdminIds, targetUserId])
+        : prevAdminIds.filter((id) => id !== targetUserId);
+
+      return {
+        ...prev,
+        members: (prev.members || []).map((member) =>
+          member.id === targetUserId
+            ? { ...member, role: newRole, isAdmin: isBecomingAdmin }
+            : member
+        ),
+        adminIds: nextAdminIds,
+      };
+    });
+
+    setIsUpdatingRole(targetUserId);
+    try {
+      const requestPayload = {
+        user_id: currentUserId,
+        group_id: groupId,
+        target_user_id: targetUserId,
+        role: newRole,
+      };
+
+      console.log("Updating member role with payload:", requestPayload);
+      const response = await groupApi.updateMemberRole(requestPayload);
+      console.log("Update member role response:", response);
+
+      toast({
+        title: "Role updated",
+        description: `Member role has been updated to ${newRole}.`,
+      });
+
+      // Ensure data is fully in sync with backend
+      await fetchGroupDetails();
+    } catch (error: any) {
+      console.error("Error updating member role:", error);
+      console.error("Error response:", error.response?.data);
+      console.error("Error status:", error.response?.status);
+
+      // Rollback optimistic update
+      setGroup((prev) => {
+        if (!prev) return prev;
+        const shouldBeAdmin = previousRole === "admin";
+
+        const prevAdminIds = Array.isArray(prev.adminIds) ? prev.adminIds : [];
+        const hasAdmin = prevAdminIds.includes(targetUserId);
+        const nextAdminIds = shouldBeAdmin
+          ? (hasAdmin ? prevAdminIds : [...prevAdminIds, targetUserId])
+          : prevAdminIds.filter((id) => id !== targetUserId);
+
+        return {
+          ...prev,
+          members: (prev.members || []).map((member) =>
+            member.id === targetUserId
+              ? { ...member, role: previousRole, isAdmin: shouldBeAdmin }
+              : member
+          ),
+          adminIds: nextAdminIds,
+        };
+      });
+
+      const errorMessage =
+        error.response?.data?.detail ||
+        error.response?.data?.message ||
+        (Array.isArray(error.response?.data)
+          ? error.response?.data.join(", ")
+          : JSON.stringify(error.response?.data)) ||
+        error.message ||
+        "An error occurred while updating the member role.";
+
+      toast({
+        title: "Failed to update role",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdatingRole(null);
+    }
+  };
+
+  const filteredFriends = availableFriends.filter((friend) => {
     const query = friendQuery.trim().toLowerCase();
     if (!query) return true;
     return (
@@ -170,10 +363,10 @@ const GroupInfo = () => {
     );
   }).filter((friend) => {
     // Filter out members who are already in the group
-    return !group?.members.some((member) => member.id === friend.id);
+    return !(group?.members?.some((member) => member.id === friend.id));
   });
 
-  const isAdmin = currentUserId && group?.adminIds.includes(currentUserId);
+  const isAdmin = !!(currentUserId && group?.adminIds?.includes(currentUserId));
 
   if (isLoading) {
     return (
@@ -345,17 +538,24 @@ const GroupInfo = () => {
                   </div>
                 </div>
 
-                {isAdmin && !member.isAdmin && member.id !== currentUserId && (
-                  <div className="flex gap-1">
-                    <Button variant="ghost" size="icon" className="h-8 w-8">
-                      <Crown className="h-4 w-4" />
-                    </Button>
+                {isAdmin && member.id !== currentUserId && (
+                  <div className="flex items-center gap-1">
+                    <select
+                      className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                      value={member.role || 'member'}
+                      onChange={(e) => handleUpdateMemberRole(member.id, e.target.value)}
+                      disabled={isUpdatingRole === member.id}
+                    >
+                      <option value="member">Member</option>
+                      <option value="admin">Admin</option>
+                    </select>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-destructive"
                       onClick={() => handleRemoveMember(member.id)}
                       disabled={isRemovingMember === member.id}
+                      title="Remove member"
                     >
                       <UserMinus className="h-4 w-4" />
                     </Button>
