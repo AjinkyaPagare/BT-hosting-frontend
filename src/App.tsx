@@ -11,7 +11,6 @@ import ChatInfo from "./pages/ChatInfo";
 import Groups from "./pages/Groups";
 import GroupInfo from "./pages/GroupInfo";
 import GroupMedia from "./pages/GroupMedia";
-import Friends from "./pages/Friends";
 import Calendar from "./pages/Calendar";
 import Files from "./pages/Files";
 import Notifications from "./pages/Notifications";
@@ -43,7 +42,6 @@ const App = () => (
                 <Route path="groups" element={<Groups />} />
                 <Route path="groups/:groupId/info" element={<GroupInfo />} />
                 <Route path="groups/:groupId/media" element={<GroupMedia />} />
-                <Route path="friends" element={<Friends />} />
                 <Route path="calendar" element={<Calendar />} />
                 <Route path="files" element={<Files />} />
                 <Route path="notifications" element={<Notifications />} />

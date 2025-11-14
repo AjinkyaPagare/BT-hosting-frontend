@@ -2,6 +2,37 @@ import axios, { AxiosHeaders, type AxiosError, type AxiosRequestConfig, type Raw
 
 const BASE_URL = "http://localhost:8000";
 
+export const ACCESS_TOKEN_KEY = "authToken";
+export const REFRESH_TOKEN_KEY = "refreshToken";
+
+const isBrowser = typeof window !== "undefined";
+
+export const tokenStorage = {
+  get: (key: string): string | null => {
+    if (!isBrowser) return null;
+    const sessionValue = window.sessionStorage.getItem(key);
+    if (sessionValue) {
+      return sessionValue;
+    }
+    return window.localStorage.getItem(key);
+  },
+  set: (key: string, value: string) => {
+    if (!isBrowser) return;
+    window.sessionStorage.setItem(key, value);
+    window.localStorage.removeItem(key);
+  },
+  remove: (key: string) => {
+    if (!isBrowser) return;
+    window.sessionStorage.removeItem(key);
+    window.localStorage.removeItem(key);
+  },
+  clearAuth: () => {
+    if (!isBrowser) return;
+    tokenStorage.remove(ACCESS_TOKEN_KEY);
+    tokenStorage.remove(REFRESH_TOKEN_KEY);
+  },
+};
+
 interface AuthenticatedRequestConfig extends AxiosRequestConfig {
   _retry?: boolean;
 }
@@ -21,7 +52,7 @@ const refreshClient = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("authToken");
+  const token = tokenStorage.get(ACCESS_TOKEN_KEY);
   if (token) {
     const headers = config.headers instanceof AxiosHeaders
       ? config.headers
@@ -40,15 +71,15 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && originalRequest) {
       const isAuthEndpoint = originalRequest.url?.includes("/login") || originalRequest.url?.includes("/signup");
       const isRefreshEndpoint = originalRequest.url?.includes("/refresh");
-      const refreshToken = localStorage.getItem("refreshToken");
+      const refreshToken = tokenStorage.get(REFRESH_TOKEN_KEY);
 
       if (refreshToken && !originalRequest._retry && !isAuthEndpoint && !isRefreshEndpoint) {
         originalRequest._retry = true;
         try {
           const { data } = await refreshClient.post("/refresh", { refresh_token: refreshToken });
           const { access_token, refresh_token } = data as { access_token: string; refresh_token: string };
-          localStorage.setItem("authToken", access_token);
-          localStorage.setItem("refreshToken", refresh_token);
+          tokenStorage.set(ACCESS_TOKEN_KEY, access_token);
+          tokenStorage.set(REFRESH_TOKEN_KEY, refresh_token);
 
           const headers = originalRequest.headers instanceof AxiosHeaders
             ? originalRequest.headers
@@ -62,8 +93,7 @@ api.interceptors.response.use(
         }
       }
 
-      localStorage.removeItem("authToken");
-      localStorage.removeItem("refreshToken");
+      tokenStorage.clearAuth();
       window.location.href = "/login";
     }
 

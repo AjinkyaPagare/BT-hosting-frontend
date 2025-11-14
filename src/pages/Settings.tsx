@@ -1,5 +1,5 @@
-import { Bell, Lock, Eye, Ban, Moon, Sun, Loader2, LogOut } from "lucide-react";
-import { useState } from "react";
+import { Bell, Lock, Ban, Moon, Sun, Loader2, LogOut } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -18,6 +18,8 @@ import {
 } from "@/services/settings";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
+import { friendsService } from "@/services/friends";
+import type { BlockedUser } from "@/types";
 
 const Settings = () => {
   const { theme, setTheme } = useTheme();
@@ -28,6 +30,7 @@ const Settings = () => {
   const [pendingGeneral, setPendingGeneral] = useState<GeneralSettingsUpdatePayload>({});
   const [pendingNotifications, setPendingNotifications] = useState<NotificationSettingsUpdatePayload>({});
   const [isLogoutPending, setIsLogoutPending] = useState(false);
+  const [selectedBlockedUser, setSelectedBlockedUser] = useState<string | null>(null);
 
   const {
     data: generalSettings,
@@ -95,11 +98,28 @@ const Settings = () => {
     });
   };
 
+  const {
+    data: blockedUsers = [],
+    isLoading: isBlockedLoading,
+    isError: isBlockedError,
+  } = useQuery({
+    queryKey: ["friends", "blocked"],
+    queryFn: friendsService.getBlockedList,
+    staleTime: 60 * 1000,
+  });
+
+  const blockedCount = blockedUsers.length;
+  const selectedBlocked = useMemo<BlockedUser | null>(
+    () => blockedUsers.find((user) => user.id === selectedBlockedUser) ?? null,
+    [blockedUsers, selectedBlockedUser]
+  );
+
   const isLoading =
     isGeneralLoading ||
     isGeneralFetching ||
     isNotificationLoading ||
     isNotificationFetching ||
+    isBlockedLoading ||
     generalMutation.isPending ||
     notificationMutation.isPending;
 
@@ -296,13 +316,44 @@ const Settings = () => {
         {/* Blocked Users */}
         <div>
           <h3 className="text-lg font-semibold mb-4">
-            <Ban className="h-5 w-5 inline mr-2" />
-            Blocked Users
+            <Ban className="h-5 w-5 inline mr-2" /> Blocked Users
           </h3>
-          <Button variant="outline" className="w-full" disabled>
-            <Eye className="h-4 w-4 mr-2" />
-            View Blocked Users (coming soon)
-          </Button>
+          {isBlockedError ? (
+            <p className="text-sm text-destructive">Unable to load blocked users.</p>
+          ) : blockedCount === 0 ? (
+            <p className="text-sm text-muted-foreground">You haven't blocked anyone yet.</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-border">
+                <div className="max-h-60 overflow-y-auto divide-y divide-border">
+                  {blockedUsers.map((blocked) => (
+                    <button
+                      key={blocked.id}
+                      type="button"
+                      className="w-full px-4 py-3 text-left hover:bg-accent transition-colors"
+                      onClick={() => setSelectedBlockedUser(blocked.id)}
+                    >
+                      <p className="text-sm font-medium">{blocked.name ?? "Unknown"}</p>
+                      <p className="text-xs text-muted-foreground">{blocked.email ?? "No email available"}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {selectedBlocked && (
+                <div className="rounded-lg border border-border p-4 bg-card">
+                  <h4 className="text-sm font-semibold mb-2">Details</h4>
+                  <p className="text-sm">Name: {selectedBlocked.name ?? "Unknown"}</p>
+                  <p className="text-sm text-muted-foreground">
+                    Email: {selectedBlocked.email ?? "Not provided"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-3">
+                    Unblocking actions will be available soon.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <Separator />
