@@ -1,11 +1,11 @@
-import { useMemo, useState, type ComponentType, type SVGProps } from "react";
+import { useEffect, useMemo, useState, type ComponentType, type SVGProps } from "react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-
+ 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
-
+ 
 type FilterValue = "unread" | "read";
-
+ 
 interface SearchProps {
   value: string;
   onChange: (value: string) => void;
@@ -15,7 +15,7 @@ interface SearchProps {
   onFilterChange?: (value: FilterValue | null) => void;
   className?: string;
 }
-
+ 
 export function Search({
   value,
   onChange,
@@ -28,13 +28,13 @@ export function Search({
   const [isHovered, setIsHovered] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [internalFilter, setInternalFilter] = useState<FilterValue | null>(null);
-
+ 
   const isPanelVisible = isHovered || isFocused;
-
+ 
   const activeFilter = useMemo(() => {
     return selectedFilter !== undefined ? selectedFilter : internalFilter;
   }, [selectedFilter, internalFilter]);
-
+ 
   const handleFilterSelect = (value: FilterValue) => {
     const nextValue = activeFilter === value ? null : value;
     if (onFilterChange) {
@@ -45,7 +45,21 @@ export function Search({
     setIsHovered(false);
     setIsFocused(false);
   };
-
+ 
+  useEffect(() => {
+      if (!value) return; // avoid empty calls
+ 
+      fetch(`http://127.0.0.1:8000/search?q=${encodeURIComponent(value)}`)
+        .then(response => response.json())
+        .then(data => console.log(data))
+        .catch(error => console.error(error));
+ 
+         fetch(`http://127.0.0.1:8000/docs#/Search/search_groups_search_groups_get=${encodeURIComponent(value)}`)
+    .then(response => response.json())
+    .then(data => console.log("Users API:", data))
+    .catch(error => console.error("Users API Error:", error));
+    }, [value]);
+ 
   return (
     <div
       className={cn("relative", className)}
@@ -62,6 +76,7 @@ export function Search({
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => setIsFocused(true)}
         onBlur={() => setIsFocused(false)}
+     
       />
       <div
         className={cn(

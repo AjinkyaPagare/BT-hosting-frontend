@@ -22,6 +22,13 @@ import MessageBubble from "@/components/MessageBubble";
 import { Chat, Message } from "@/types";
 import { useToast } from "@/hooks/use-toast";
 
+type Friend = {
+  id: string;
+  name: string;
+  email: string;
+  isOnline: boolean;
+};
+
 // Mock data
 const mockChats: Chat[] = [
   {
@@ -104,13 +111,6 @@ const mockMessages: Message[] = [
   },
 ];
 
-const mockFriends = [
-  { id: "user1", name: "John Doe", email: "john@example.com", isOnline: true },
-  { id: "user2", name: "Jane Smith", email: "jane@example.com", isOnline: false },
-  { id: "user3", name: "Bob Johnson", email: "bob@example.com", isOnline: true },
-  { id: "user4", name: "Alice Brown", email: "alice@example.com", isOnline: true },
-];
-
 const Chats = () => {
   const [chats, setChats] = useState<Chat[]>(mockChats);
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
@@ -120,6 +120,7 @@ const Chats = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [isCreateChatOpen, setIsCreateChatOpen] = useState(false);
   const [friendQuery, setFriendQuery] = useState("");
+  const [friendResults, setFriendResults] = useState<Friend[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [isDesktop, setIsDesktop] = useState(false);
   const navigate = useNavigate();
@@ -149,13 +150,48 @@ const Chats = () => {
     });
   }, [chats, filter, searchQuery]);
 
-  const filteredFriends = useMemo(() => {
-    const query = friendQuery.trim().toLowerCase();
-    if (!query) return mockFriends;
-    return mockFriends.filter(
-      (friend) =>
-        friend.name.toLowerCase().includes(query) || friend.email.toLowerCase().includes(query),
-    );
+  useEffect(() => {
+    const query = friendQuery.trim();
+
+    if (!query) {
+      setFriendResults([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      fetch(`http://127.0.0.1:8000/search/?q=${encodeURIComponent(query)}`, {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+        },
+        signal: controller.signal,
+      })
+        .then((response) => response.json())
+        .then((data) => {
+          const users = Array.isArray(data) ? data : (data.results ?? []);
+          const mapped: Friend[] = users
+            .map((u: any) => ({
+              id: String(u.id ?? u.userId ?? ""),
+              name: String(u.name ?? u.full_name ?? ""),
+              email: String(u.email ?? ""),
+              isOnline: Boolean(u.isOnline ?? false),
+            }))
+            .filter((u) => u.id && u.name);
+
+          setFriendResults(mapped);
+        })
+        .catch((error) => {
+          if ((error as any).name !== "AbortError") {
+            console.error("Friend search error", error);
+          }
+        });
+    }, 300);
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [friendQuery]);
 
   const handleStartChat = (friendId: string) => {
@@ -170,7 +206,7 @@ const Chats = () => {
       return;
     }
 
-    const friend = mockFriends.find((f) => f.id === friendId);
+    const friend = friendResults.find((f) => f.id === friendId);
     if (!friend) return;
 
     const newChat: Chat = {
@@ -255,7 +291,7 @@ const Chats = () => {
                     Search your friends to begin a conversation or send an invite by email.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="flex-1 overflow-y-auto space-y-6 pr-1 p-1">
+                <div className="flex-1 min-h-0 flex flex-col space-y-2 pr-1 p-1">
                   <div className="space-y-2">
                     <Label htmlFor="friend-search">Search friends</Label>
                     <Input
@@ -264,6 +300,36 @@ const Chats = () => {
                       value={friendQuery}
                       onChange={(e) => setFriendQuery(e.target.value)}
                     />
+                  </div>
+                  <div className="space-y-2 mt-4 overflow-y-auto flex-1 min-h-0 pr-1">
+                    {friendResults.length === 0 && friendQuery.trim() && (
+                      <p className="text-sm text-muted-foreground">No users found.</p>
+                    )}
+                    {friendResults.map((friend) => (
+                      <div
+                        key={friend.id}
+                        className="w-full flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "h-2 w-2 rounded-full",
+                              friend.isOnline ? "bg-emerald-500" : "bg-muted-foreground/40",
+                            )}
+                          />
+                          <div>
+                            <p className="font-medium">{friend.name}</p>
+                            <p className="text-xs text-muted-foreground">{friend.email}</p>
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => handleStartChat(friend.id)}
+                        >
+                          Send invitation
+                        </Button>
+                      </div>
+                    ))}
                   </div>
                 </div>
                 <DialogFooter className="pt-4">
