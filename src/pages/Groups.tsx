@@ -268,7 +268,7 @@ const Groups = () => {
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-2">
                   <Plus className="h-4 w-4" />
-                  New group
+                  New group 
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-xl w-[calc(100vw-2rem)] max-h-[85vh] overflow-hidden flex flex-col">
@@ -278,7 +278,7 @@ const Groups = () => {
                     Give your group a name, add teammates, or invite them via email.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="flex-1 overflow-y-auto space-y-6 pr-1">
+                <div className="flex-1 overflow-y-auto space-y-6 pr-1 p-3">
                   <div className="space-y-3">
                     <div className="space-y-2">
                       <Label htmlFor="group-name">Group name</Label>
@@ -289,17 +289,7 @@ const Groups = () => {
                         onChange={(e) => setGroupName(e.target.value)}
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="group-description">Description (optional)</Label>
-                      <Input
-                        id="group-description"
-                        placeholder="Plan and track the product launch"
-                        value={groupDescription}
-                        onChange={(e) => setGroupDescription(e.target.value)}
-                      />
-                    </div>
                   </div>
-
                   <Separator />
 
                   <div className="space-y-3">
@@ -310,51 +300,7 @@ const Groups = () => {
                       value={friendQuery}
                       onChange={(e) => setFriendQuery(e.target.value)}
                     />
-                    <div className="max-h-56 overflow-y-auto rounded-md border border-border">
-                      {filteredFriends.length === 0 ? (
-                        <p className="p-4 text-sm text-muted-foreground">No friends found.</p>
-                      ) : (
-                        <ul className="divide-y divide-border">
-                          {filteredFriends.map((friend) => {
-                            const isSelected = selectedFriendIds.includes(friend.id);
-                            return (
-                              <li key={friend.id} className="flex items-center justify-between gap-3 p-3">
-                                <div>
-                                  <p className="text-sm font-medium">{friend.name}</p>
-                                  <p className="text-xs text-muted-foreground">{friend.email}</p>
-                                </div>
-                                <Button
-                                  size="sm"
-                                  variant={isSelected ? "default" : "outline"}
-                                  onClick={() => handleToggleFriend(friend.id)}
-                                >
-                                  {isSelected ? "Added" : "Add"}
-                                </Button>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-3">
-                    <Label htmlFor="group-invite-email">Invite by email</Label>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <Input
-                        id="group-invite-email"
-                        type="email"
-                        placeholder="teammate@example.com"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                      />
-                      <Button type="button" variant="outline" className="gap-2" onClick={handleSendInvite}>
-                        <Mail className="h-4 w-4" />
-                        Send invite
-                      </Button>
-                    </div>
+                  
                   </div>
                 </div>
                 <DialogFooter className="pt-4">

@@ -255,7 +255,7 @@ const Chats = () => {
                     Search your friends to begin a conversation or send an invite by email.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="flex-1 overflow-y-auto space-y-6 pr-1">
+                <div className="flex-1 overflow-y-auto space-y-6 pr-1 p-1">
                   <div className="space-y-2">
                     <Label htmlFor="friend-search">Search friends</Label>
                     <Input
@@ -264,44 +264,6 @@ const Chats = () => {
                       value={friendQuery}
                       onChange={(e) => setFriendQuery(e.target.value)}
                     />
-                    <div className="max-h-56 overflow-y-auto rounded-md border border-border">
-                      {filteredFriends.length === 0 ? (
-                        <p className="p-4 text-sm text-muted-foreground">No friends found.</p>
-                      ) : (
-                        <ul className="divide-y divide-border">
-                          {filteredFriends.map((friend) => (
-                            <li key={friend.id} className="flex items-center justify-between gap-3 p-3">
-                              <div>
-                                <p className="text-sm font-medium">{friend.name}</p>
-                                <p className="text-xs text-muted-foreground">{friend.email}</p>
-                              </div>
-                              <Button size="sm" onClick={() => handleStartChat(friend.id)}>
-                                Start chat
-                              </Button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  <div className="space-y-3">
-                    <Label htmlFor="invite-email">Invite by email</Label>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <Input
-                        id="invite-email"
-                        type="email"
-                        placeholder="colleague@example.com"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                      />
-                      <Button type="button" variant="outline" className="gap-2" onClick={handleSendInvite}>
-                        <Mail className="h-4 w-4" />
-                        Send invite
-                      </Button>
-                    </div>
                   </div>
                 </div>
                 <DialogFooter className="pt-4">
