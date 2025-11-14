@@ -9,6 +9,7 @@ import { MessageSquare } from "lucide-react";
 import { loginUser } from "@/services/auth";
 import { isAxiosError } from "axios";
 import { useAuth } from "@/context/AuthContext";
+import { tokenStorage, ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from "@/services/api";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -24,8 +25,8 @@ const Login = () => {
 
     try {
       const { access_token, refresh_token } = await loginUser({ email, password });
-      localStorage.setItem("authToken", access_token);
-      localStorage.setItem("refreshToken", refresh_token);
+      tokenStorage.set(ACCESS_TOKEN_KEY, access_token);
+      tokenStorage.set(REFRESH_TOKEN_KEY, refresh_token);
 
       await refreshUser();
 

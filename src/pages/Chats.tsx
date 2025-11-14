@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Paperclip, Send, Smile, Info, Phone, Video, Plus, Mail, ArrowLeft } from "lucide-react";
+import { Paperclip, Send, Smile, Info, Phone, Video, Plus, ArrowLeft, Loader2, Ban } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -15,12 +16,14 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import ChatListItem from "@/components/ChatListItem";
 import MessageBubble from "@/components/MessageBubble";
-import { Chat, Message } from "@/types";
+import { Chat, Message, FriendRequest as FriendRequestType, FriendListItem } from "@/types";
 import { useToast } from "@/hooks/use-toast";
+import { friendsService } from "@/services/friends";
+import api from "@/services/api";
 
 type Friend = {
   id: string;
@@ -28,55 +31,6 @@ type Friend = {
   email: string;
   isOnline: boolean;
 };
-
-// Mock data
-const mockChats: Chat[] = [
-  {
-    id: "1",
-    userId: "user1",
-    user: {
-      id: "user1",
-      name: "John Doe",
-      email: "john@example.com",
-      isOnline: true,
-    },
-    lastMessage: {
-      id: "msg1",
-      chatId: "1",
-      senderId: "user1",
-      content: "Hey! How are you doing?",
-      type: "text",
-      timestamp: new Date().toISOString(),
-      isRead: false,
-      isDelivered: true,
-    },
-    unreadCount: 2,
-    isPinned: false,
-  },
-  {
-    id: "2",
-    userId: "user2",
-    user: {
-      id: "user2",
-      name: "Jane Smith",
-      email: "jane@example.com",
-      isOnline: false,
-      lastSeen: new Date(Date.now() - 3600000).toISOString(),
-    },
-    lastMessage: {
-      id: "msg2",
-      chatId: "2",
-      senderId: "me",
-      content: "Thanks for the update!",
-      type: "text",
-      timestamp: new Date(Date.now() - 3600000).toISOString(),
-      isRead: true,
-      isDelivered: true,
-    },
-    unreadCount: 0,
-    isPinned: false,
-  },
-];
 
 const mockMessages: Message[] = [
   {
@@ -112,8 +66,9 @@ const mockMessages: Message[] = [
 ];
 
 const Chats = () => {
-  const [chats, setChats] = useState<Chat[]>(mockChats);
-  const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
+  const queryClient = useQueryClient();
+
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
   const [messageInput, setMessageInput] = useState("");
@@ -121,10 +76,61 @@ const Chats = () => {
   const [isCreateChatOpen, setIsCreateChatOpen] = useState(false);
   const [friendQuery, setFriendQuery] = useState("");
   const [friendResults, setFriendResults] = useState<Friend[]>([]);
-  const [inviteEmail, setInviteEmail] = useState("");
   const [isDesktop, setIsDesktop] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  const {
+    data: pendingRequests = [],
+    isLoading: isPendingLoading,
+    isFetching: isPendingFetching,
+    isError: isPendingError,
+  } = useQuery({
+    queryKey: ["friends", "pending"],
+    queryFn: friendsService.getPendingRequests,
+  });
+
+  const {
+    data: friendList = [],
+    isLoading: isFriendsLoading,
+    isFetching: isFriendsFetching,
+    isError: isFriendsError,
+  } = useQuery({
+    queryKey: ["friends", "list"],
+    queryFn: friendsService.getFriendList,
+  });
+
+  const {
+    data: sentRequests = [],
+    isLoading: isSentLoading,
+    isFetching: isSentFetching,
+    isError: isSentError,
+  } = useQuery({
+    queryKey: ["friends", "sent"],
+    queryFn: friendsService.getSentRequests,
+  });
+
+  const chats = useMemo<Chat[]>(
+    () =>
+      friendList.map((friend: FriendListItem) => ({
+        id: friend.id,
+        userId: friend.id,
+        user: {
+          id: friend.id,
+          name: friend.name ?? "Unknown",
+          email: friend.email ?? "",
+          isOnline: false,
+        },
+        unreadCount: 0,
+        isPinned: false,
+      })),
+    [friendList]
+  );
+
+  const selectedChat = useMemo(
+    () => chats.find((chat) => chat.id === selectedChatId) ?? null,
+    [chats, selectedChatId]
+  );
 
   useEffect(() => {
     const handleResize = () => setIsDesktop(window.innerWidth >= 768);
@@ -134,10 +140,19 @@ const Chats = () => {
   }, []);
 
   useEffect(() => {
-    if (isDesktop && !selectedChat && chats[0]) {
-      setSelectedChat(chats[0]);
+    if (isDesktop && !selectedChatId && chats[0]) {
+      setSelectedChatId(chats[0].id);
     }
-  }, [isDesktop, selectedChat, chats]);
+  }, [isDesktop, selectedChatId, chats]);
+
+  useEffect(() => {
+    if (selectedChatId && !chats.some((chat) => chat.id === selectedChatId)) {
+      setSelectedChatId(chats[0]?.id ?? null);
+    }
+    if (!selectedChatId && chats[0]) {
+      setSelectedChatId(chats[0].id);
+    }
+  }, [chats, selectedChatId]);
 
   const filteredChats = useMemo(() => {
     return chats.filter((chat) => {
@@ -150,6 +165,39 @@ const Chats = () => {
     });
   }, [chats, filter, searchQuery]);
 
+  const pendingChatItems = useMemo(
+    () =>
+      sentRequests.map((request) => ({
+        id: request.id,
+        name: request.receiverName ?? request.receiverEmail ?? "Unknown",
+        email: request.receiverEmail ?? "",
+        createdAt: request.createdAt,
+      })),
+    [sentRequests]
+  );
+
+  const filteredPendingChats = useMemo(() => {
+    if (filter !== "all") return [];
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return pendingChatItems;
+    return pendingChatItems.filter((item) =>
+      item.name.toLowerCase().includes(query) || item.email.toLowerCase().includes(query)
+    );
+  }, [filter, pendingChatItems, searchQuery]);
+
+  const filteredIncomingRequests = useMemo(() => {
+    if (filter !== "all") return [];
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return pendingRequests;
+    return pendingRequests.filter((request) => {
+      const name = (request.requesterName ?? "").toLowerCase();
+      const email = (request.requesterEmail ?? "").toLowerCase();
+      return name.includes(query) || email.includes(query);
+    });
+  }, [filter, pendingRequests, searchQuery]);
+
+  const shouldShowPendingSections = filter === "all";
+
   useEffect(() => {
     const query = friendQuery.trim();
 
@@ -160,16 +208,13 @@ const Chats = () => {
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-      fetch(`http://127.0.0.1:8000/search/?q=${encodeURIComponent(query)}`, {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-        },
-        signal: controller.signal,
-      })
-        .then((response) => response.json())
-        .then((data) => {
-          const users = Array.isArray(data) ? data : (data.results ?? []);
+      api
+        .get("/search", {
+          params: { q: query },
+          signal: controller.signal,
+        })
+        .then((response) => {
+          const users = Array.isArray(response.data) ? response.data : response.data?.results ?? [];
           const mapped: Friend[] = users
             .map((u: any) => ({
               id: String(u.id ?? u.userId ?? ""),
@@ -182,7 +227,7 @@ const Chats = () => {
           setFriendResults(mapped);
         })
         .catch((error) => {
-          if ((error as any).name !== "AbortError") {
+          if ((error as any).name !== "CanceledError") {
             console.error("Friend search error", error);
           }
         });
@@ -194,75 +239,144 @@ const Chats = () => {
     };
   }, [friendQuery]);
 
-  const handleStartChat = (friendId: string) => {
+  const invalidateFriendQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["friends", "pending"] });
+    queryClient.invalidateQueries({ queryKey: ["friends", "list"] });
+    queryClient.invalidateQueries({ queryKey: ["friends", "sent"] });
+    queryClient.invalidateQueries({ queryKey: ["friends", "blocked"] });
+  };
+
+  const [actingRequestId, setActingRequestId] = useState<string | null>(null);
+
+  const acceptMutation = useMutation({
+    mutationFn: friendsService.acceptRequest,
+    onMutate: (requestId: string) => {
+      setActingRequestId(requestId);
+    },
+    onSuccess: () => {
+      toast({ title: "Friend request accepted" });
+      invalidateFriendQueries();
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to accept request",
+        description: error?.response?.data?.detail || error?.message || "Something went wrong",
+        variant: "destructive",
+      });
+    },
+    onSettled: () => {
+      setActingRequestId(null);
+    },
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: friendsService.rejectRequest,
+    onMutate: (requestId: string) => {
+      setActingRequestId(requestId);
+    },
+    onSuccess: () => {
+      toast({ title: "Friend request rejected" });
+      invalidateFriendQueries();
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to reject request",
+        description: error?.response?.data?.detail || error?.message || "Something went wrong",
+        variant: "destructive",
+      });
+    },
+    onSettled: () => {
+      setActingRequestId(null);
+    },
+  });
+
+  const sendRequestMutation = useMutation({
+    mutationFn: friendsService.sendRequest,
+    onSuccess: (data) => {
+      toast({
+        title: "Friend request sent",
+        description: `Request sent to ${data.receiverName ?? data.receiverEmail ?? data.receiverId}.`,
+      });
+      invalidateFriendQueries();
+      setIsCreateChatOpen(false);
+      setFriendQuery("");
+      setFriendResults([]);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to send request",
+        description: error?.response?.data?.detail || error?.message || "Something went wrong",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const blockFriendMutation = useMutation({
+    mutationFn: friendsService.blockFriend,
+    onSuccess: (data) => {
+      toast({
+        title: "Friend blocked",
+        description: `${data.receiverName ?? data.receiverEmail ?? "User"} has been blocked.`,
+      });
+      invalidateFriendQueries();
+      setSelectedChatId(null);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to block friend",
+        description: error?.response?.data?.detail || error?.message || "Something went wrong",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSendFriendRequest = (friendId: string) => {
+    if (!friendId) return;
+
     const existingChat = chats.find((chat) => chat.userId === friendId);
     if (existingChat) {
-      setSelectedChat(existingChat);
+      setSelectedChatId(existingChat.id);
       toast({
-        title: "Chat already exists",
-        description: `Resuming conversation with ${existingChat.user.name}.`,
+        title: "Already connected",
+        description: `Opening conversation with ${existingChat.user.name}.`,
       });
       setIsCreateChatOpen(false);
       return;
     }
 
-    const friend = friendResults.find((f) => f.id === friendId);
-    if (!friend) return;
-
-    const newChat: Chat = {
-      id: `chat-${Date.now()}`,
-      userId: friend.id,
-      user: {
-        id: friend.id,
-        name: friend.name,
-        email: friend.email,
-        isOnline: friend.isOnline,
-      },
-      unreadCount: 0,
-      isPinned: false,
-    };
-
-    setChats((prev) => [newChat, ...prev]);
-    setSelectedChat(newChat);
-    toast({
-      title: "New chat created",
-      description: `You can now message ${friend.name}.`,
-    });
-    setIsCreateChatOpen(false);
-  };
-
-  const handleSendInvite = () => {
-    const email = inviteEmail.trim();
-    if (!email) {
+    const alreadySent = sentRequests.some(
+      (request) => request.receiverId === friendId && request.status === "pending"
+    );
+    if (alreadySent) {
       toast({
-        title: "Enter an email",
-        description: "Provide an email address to send an invite.",
-        variant: "destructive",
+        title: "Request already sent",
+        description: "You have already sent a friend request to this user.",
       });
       return;
     }
 
-    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailPattern.test(email)) {
-      toast({
-        title: "Invalid email",
-        description: "Please enter a valid email address.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    toast({
-      title: "Invite sent",
-      description: `We've sent a chat invitation to ${email}.`,
-    });
-    setInviteEmail("");
+    sendRequestMutation.mutate(friendId);
   };
 
   const handleSendMessage = () => {
     if (!messageInput.trim()) return;
     // Handle message send
     setMessageInput("");
+  };
+
+  const handleBlockFriend = (friendId: string) => {
+    if (!friendId || blockFriendMutation.isPending) {
+      return;
+    }
+    blockFriendMutation.mutate(friendId);
+  };
+
+  const formatRequestDate = (request: FriendRequestType) => {
+    try {
+      return new Date(request.createdAt).toLocaleString();
+    } catch (error) {
+      return "";
+    }
   };
 
   return (
@@ -305,31 +419,43 @@ const Chats = () => {
                     {friendResults.length === 0 && friendQuery.trim() && (
                       <p className="text-sm text-muted-foreground">No users found.</p>
                     )}
-                    {friendResults.map((friend) => (
-                      <div
-                        key={friend.id}
-                        className="w-full flex items-center justify-between rounded-md border px-3 py-2 text-sm"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "h-2 w-2 rounded-full",
-                              friend.isOnline ? "bg-emerald-500" : "bg-muted-foreground/40",
-                            )}
-                          />
-                          <div>
-                            <p className="font-medium">{friend.name}</p>
-                            <p className="text-xs text-muted-foreground">{friend.email}</p>
-                          </div>
-                        </div>
-                        <Button
-                          size="sm"
-                          onClick={() => handleStartChat(friend.id)}
+                    {friendResults.map((friend) => {
+                      const alreadyFriend = chats.some((chat) => chat.userId === friend.id);
+                      const alreadyRequested = sentRequests.some(
+                        (request) => request.receiverId === friend.id && request.status === "pending"
+                      );
+                      return (
+                        <div
+                          key={friend.id}
+                          className="w-full flex items-center justify-between rounded-md border px-3 py-2 text-sm"
                         >
-                          Send invitation
-                        </Button>
-                      </div>
-                    ))}
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={cn(
+                                "h-2 w-2 rounded-full",
+                                friend.isOnline ? "bg-emerald-500" : "bg-muted-foreground/40",
+                              )}
+                            />
+                            <div>
+                              <p className="font-medium">{friend.name}</p>
+                              <p className="text-xs text-muted-foreground">{friend.email}</p>
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={alreadyFriend ? "secondary" : "default"}
+                            onClick={() => handleSendFriendRequest(friend.id)}
+                            disabled={alreadyFriend || alreadyRequested || sendRequestMutation.isPending}
+                          >
+                            {alreadyFriend
+                              ? "Open chat"
+                              : alreadyRequested
+                              ? "Requested"
+                              : "Send request"}
+                          </Button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
                 <DialogFooter className="pt-4">
@@ -351,12 +477,116 @@ const Chats = () => {
           />
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto space-y-4 p-4 pt-0">
+          {shouldShowPendingSections && (
+            <div className="space-y-6">
+              <div className="space-y-2">
+                {(isPendingLoading || isPendingFetching) && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading requests...
+                  </div>
+                )}
+                {isPendingError && (
+                  <p className="text-sm text-destructive">Unable to load friend requests.</p>
+                )}
+                {!isPendingLoading && !isPendingFetching && filteredIncomingRequests.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase text-muted-foreground">Friend requests</h3>
+                    {filteredIncomingRequests.map((request) => {
+                      const name = request.requesterName ?? request.requesterEmail ?? "Unknown";
+                      const isActing = actingRequestId === request.id;
+                      return (
+                        <div
+                          key={request.id}
+                          className="flex items-center justify-between rounded-lg border border-border bg-card/60 p-3"
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">{name}</span>
+                            <span className="text-xs text-muted-foreground">
+                              Requested on {formatRequestDate(request)}
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => acceptMutation.mutate(request.id)}
+                              disabled={
+                                isActing || acceptMutation.isPending || rejectMutation.isPending
+                              }
+                            >
+                              Accept
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => rejectMutation.mutate(request.id)}
+                              disabled={
+                                isActing || acceptMutation.isPending || rejectMutation.isPending
+                              }
+                            >
+                              Reject
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                {(isSentLoading || isSentFetching) && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading pending chats...
+                  </div>
+                )}
+                {isSentError && (
+                  <p className="text-sm text-destructive">Unable to load pending chats.</p>
+                )}
+                {!isSentLoading && !isSentFetching && filteredPendingChats.length > 0 && (
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase text-muted-foreground">Pending chats</h3>
+                    {filteredPendingChats.map((pending) => (
+                      <div
+                        key={pending.id}
+                        className="flex items-center justify-between rounded-lg border border-dashed border-border bg-card/40 p-3"
+                      >
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">{pending.name}</span>
+                          <span className="text-xs text-muted-foreground">
+                            Request sent {new Date(pending.createdAt).toLocaleString()}
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="text-xs uppercase">
+                          Pending
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {(isFriendsLoading || isFriendsFetching) && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading friends...
+            </div>
+          )}
+          {isFriendsError && (
+            <p className="text-sm text-destructive">Unable to load friends list.</p>
+          )}
+          {!isFriendsLoading && !isFriendsFetching && filteredChats.length === 0 && (
+            <p className="text-sm text-muted-foreground">No friends to show. Try adding new connections.</p>
+          )}
           {filteredChats.map((chat) => (
             <ChatListItem
               key={chat.id}
               chat={chat}
-              onClick={() => setSelectedChat(chat)}
+              onClick={() => setSelectedChatId(chat.id)}
               isActive={selectedChat?.id === chat.id}
             />
           ))}
@@ -373,7 +603,7 @@ const Chats = () => {
                 variant="ghost"
                 size="icon"
                 className="md:hidden"
-                onClick={() => setSelectedChat(null)}
+                onClick={() => setSelectedChatId(null)}
                 aria-label="Back to chat list"
               >
                 <ArrowLeft className="h-5 w-5" />
@@ -397,6 +627,15 @@ const Chats = () => {
               </Button>
               <Button variant="ghost" size="icon">
                 <Video className="h-5 w-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleBlockFriend(selectedChat.user.id)}
+                disabled={blockFriendMutation.isPending}
+                aria-label="Block friend"
+              >
+                <Ban className="h-5 w-5" />
               </Button>
               <Button
                 variant="ghost"

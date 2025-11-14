@@ -22,7 +22,6 @@ const navigation = [
   { name: "Groups", href: "/app/groups", icon: Users },
   { name: "Calendar", href: "/app/calendar", icon: CalendarIcon },
   { name: "Files", href: "/app/files", icon: FolderOpen },
-  { name: "Friends", href: "/app/friends", icon: UserPlus },
   { name: "Notifications", href: "/app/notifications", icon: Bell },
   { name: "Settings", href: "/app/settings", icon: SettingsIcon },
 ];

@@ -46,12 +46,27 @@ export interface Group {
 
 export interface FriendRequest {
   id: string;
-  senderId: string;
-  sender: User;
-  receiverId: string;
-  receiver: User;
-  status: 'pending' | 'accepted' | 'rejected';
+  requesterId: string | null;
+  requesterName: string | null;
+  requesterEmail: string | null;
+  receiverId: string | null;
+  receiverName: string | null;
+  receiverEmail: string | null;
+  status: 'pending' | 'accepted' | 'blocked';
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface FriendListItem {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+}
+
+export interface BlockedUser {
+  id: string;
+  name?: string | null;
+  email?: string | null;
 }
 
 export interface Event {

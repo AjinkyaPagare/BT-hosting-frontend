@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { useNavigate } from "react-router-dom";
 import { CurrentUser, fetchCurrentUser } from "@/services/user";
 import { logoutUser } from "@/services/auth";
+import { tokenStorage, ACCESS_TOKEN_KEY } from "@/services/api";
 
 interface AuthContextValue {
   user: CurrentUser | null;
@@ -18,7 +19,7 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   const navigate = useNavigate();
 
   const refreshUser = useCallback(async () => {
-    const token = localStorage.getItem("authToken");
+    const token = tokenStorage.get(ACCESS_TOKEN_KEY);
     if (!token) {
       setUser(null);
       return;
@@ -48,8 +49,7 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     } catch (error) {
       // ignore API errors, proceed with local cleanup
     } finally {
-      localStorage.removeItem("authToken");
-      localStorage.removeItem("refreshToken");
+      tokenStorage.clearAuth();
       setUser(null);
       navigate("/login", { replace: true });
     }
