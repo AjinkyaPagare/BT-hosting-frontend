@@ -21,6 +21,7 @@ import ChatListItem from "@/components/ChatListItem";
 import MessageBubble from "@/components/MessageBubble";
 import { Chat, Message } from "@/types";
 import { useToast } from "@/hooks/use-toast";
+import { searchUsers } from "@/services/search";
 
 type Friend = {
   id: string;
@@ -160,24 +161,14 @@ const Chats = () => {
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-      fetch(`http://127.0.0.1:8000/search/?q=${encodeURIComponent(query)}`, {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-        },
-        signal: controller.signal,
-      })
-        .then((response) => response.json())
-        .then((data) => {
-          const users = Array.isArray(data) ? data : (data.results ?? []);
-          const mapped: Friend[] = users
-            .map((u: any) => ({
-              id: String(u.id ?? u.userId ?? ""),
-              name: String(u.name ?? u.full_name ?? ""),
-              email: String(u.email ?? ""),
-              isOnline: Boolean(u.isOnline ?? false),
-            }))
-            .filter((u) => u.id && u.name);
+      searchUsers(query, controller.signal)
+        .then((results) => {
+          const mapped: Friend[] = results.map((u) => ({
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            isOnline: u.isOnline,
+          }));
 
           setFriendResults(mapped);
         })

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search as SearchIcon, Paperclip, Send, Smile, Info, Plus, Mail, ArrowLeft } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,14 @@ import { cn } from "@/lib/utils";
 import { Search as SearchComponent } from "@/components/ui/Search";
 import { useToast } from "@/hooks/use-toast";
 import { groupApi, getCurrentUserId } from "@/services/group_apis";
+import { searchUsers } from "@/services/search";
+
+type Friend = {
+  id: string;
+  name: string;
+  email: string;
+  isOnline: boolean;
+};
 
 const mockGroups: Group[] = [
   {
@@ -80,14 +88,6 @@ const mockMessages: Message[] = [
   },
 ];
 
-const mockFriends = [
-  { id: "user1", name: "John Doe", email: "john@example.com", isOnline: true },
-  { id: "user2", name: "Jane Smith", email: "jane@example.com", isOnline: false },
-  { id: "user3", name: "Bob Johnson", email: "bob@example.com", isOnline: true },
-  { id: "user4", name: "Alice Brown", email: "alice@example.com", isOnline: true },
-  { id: "user5", name: "Charlie Adams", email: "charlie@example.com", isOnline: false },
-];
-
 const Groups = () => {
   const [groups, setGroups] = useState<Group[]>(mockGroups);
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
@@ -98,12 +98,15 @@ const Groups = () => {
   const [groupName, setGroupName] = useState("");
   const [groupDescription, setGroupDescription] = useState("");
   const [friendQuery, setFriendQuery] = useState("");
+  const [friendResults, setFriendResults] = useState<Friend[]>([]);
+  const [selectedFriends, setSelectedFriends] = useState<Friend[]>([]);
   const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [isDesktop, setIsDesktop] = useState(false);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const friendSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const handleResize = () => setIsDesktop(window.innerWidth >= 768);
@@ -118,6 +121,40 @@ const Groups = () => {
     }
   }, [isDesktop, selectedGroup, groups]);
 
+  useEffect(() => {
+    const query = friendQuery.trim();
+
+    if (!query) {
+      setFriendResults([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      searchUsers(query, controller.signal)
+        .then((results) => {
+          const mapped: Friend[] = results.map((u) => ({
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            isOnline: u.isOnline,
+          }));
+
+          setFriendResults(mapped);
+        })
+        .catch((error) => {
+          if ((error as any).name !== "AbortError") {
+            console.error("Group create friend search error", error);
+          }
+        });
+    }, 300);
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [friendQuery]);
+
   const filteredGroups = useMemo(() => {
     return groups.filter((group) => {
       const matchesSearch = group.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -130,18 +167,46 @@ const Groups = () => {
   }, [groups, filter, searchQuery]);
 
   const filteredFriends = useMemo(() => {
-    const query = friendQuery.trim().toLowerCase();
-    if (!query) return mockFriends;
-    return mockFriends.filter(
-      (friend) =>
-        friend.name.toLowerCase().includes(query) || friend.email.toLowerCase().includes(query),
-    );
-  }, [friendQuery]);
+    return friendResults;
+  }, [friendResults]);
 
-  const handleToggleFriend = (friendId: string) => {
-    setSelectedFriendIds((prev) =>
-      prev.includes(friendId) ? prev.filter((id) => id !== friendId) : [...prev, friendId],
-    );
+  const handleToggleFriend = (friend: Friend) => {
+    setSelectedFriendIds((prev) => {
+      const alreadySelected = prev.includes(friend.id);
+      const next = alreadySelected ? prev.filter((id) => id !== friend.id) : [...prev, friend.id];
+
+      // If this is a new selection, clear the search text so user can search next member
+      if (!alreadySelected) {
+        setFriendQuery("");
+        if (friendSearchInputRef.current) {
+          friendSearchInputRef.current.focus();
+        }
+      }
+
+      return next;
+    });
+
+    setSelectedFriends((prev) => {
+      const exists = prev.find((f) => f.id === friend.id);
+      if (exists) {
+        return prev.filter((f) => f.id !== friend.id);
+      }
+      return [...prev, friend];
+    });
+  };
+
+  const handleFriendSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Backspace" && friendQuery === "" && selectedFriends.length > 0) {
+      // Remove last selected friend when input is empty
+      setSelectedFriends((prev) => {
+        const updated = [...prev];
+        const removed = updated.pop();
+        if (removed) {
+          setSelectedFriendIds((ids) => ids.filter((id) => id !== removed.id));
+        }
+        return updated;
+      });
+    }
   };
 
   const handleCreateGroup = async () => {
@@ -182,14 +247,16 @@ const Groups = () => {
         avatar: response.avatar,
         adminIds: [currentUserId],
         memberIds: response.member_ids || selectedFriendIds,
-        members: mockFriends
-          .filter((friend) => selectedFriendIds.includes(friend.id))
-          .map((member) => ({
-            id: member.id,
-            name: member.name,
-            email: member.email,
-            isOnline: member.isOnline,
-          })),
+        members:
+          response.members ||
+          friendResults
+            .filter((friend) => selectedFriendIds.includes(friend.id))
+            .map((member) => ({
+              id: member.id,
+              name: member.name,
+              email: member.email,
+              isOnline: member.isOnline,
+            })),
         unreadCount: 0,
         createdAt: response.created_at || new Date().toISOString(),
       };
@@ -294,13 +361,58 @@ const Groups = () => {
 
                   <div className="space-y-3">
                     <Label htmlFor="group-member-search">Add members</Label>
-                    <Input
-                      id="group-member-search"
-                      placeholder="Search friends by name or email"
-                      value={friendQuery}
-                      onChange={(e) => setFriendQuery(e.target.value)}
-                    />
-                  
+                    <div className="flex flex-wrap items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
+                      {selectedFriends.map((friend) => (
+                        <div
+                          key={friend.id}
+                          className="flex items-center gap-2 rounded-full bg-accent px-3 py-1 text-xs"
+                        >
+                          <span className="font-medium">{friend.name}</span>
+                          <button
+                            type="button"
+                            className="text-muted-foreground hover:text-foreground"
+                            onClick={() => handleToggleFriend(friend)}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                      <input
+                        id="group-member-search"
+                        className="flex-1 bg-transparent outline-none text-sm min-w-[120px]"
+                        placeholder="Search friends by name or email"
+                        value={friendQuery}
+                        onChange={(e) => setFriendQuery(e.target.value)}
+                        onKeyDown={handleFriendSearchKeyDown}
+                        ref={friendSearchInputRef}
+                      />
+                    </div>
+                    <div className="rounded-md border border-border mt-2">
+                      {filteredFriends.length === 0 && friendQuery.trim() ? (
+                        <p className="p-3 text-sm text-muted-foreground">No users found.</p>
+                      ) : (
+                        <ul className="divide-y divide-border">
+                          {filteredFriends.map((friend) => {
+                            const isSelected = selectedFriendIds.includes(friend.id);
+                            return (
+                              <li
+                                key={friend.id}
+                                onClick={() => handleToggleFriend(friend)}
+                                className={cn(
+                                  "flex items-center justify-between gap-3 p-3 cursor-pointer",
+                                  isSelected && "bg-accent",
+                                )}
+                              >
+                                <div>
+                                  <p className="text-sm font-medium">{friend.name}</p>
+                                  <p className="text-xs text-muted-foreground">{friend.email}</p>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <DialogFooter className="pt-4">
