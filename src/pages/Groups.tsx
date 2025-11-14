@@ -22,6 +22,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Search as SearchComponent } from "@/components/ui/Search";
 import { useToast } from "@/hooks/use-toast";
+import { groupApi, getCurrentUserId } from "@/services/group_apis";
 
 const mockGroups: Group[] = [
   {
@@ -100,6 +101,7 @@ const Groups = () => {
   const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [isDesktop, setIsDesktop] = useState(false);
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -142,7 +144,7 @@ const Groups = () => {
     );
   };
 
-  const handleCreateGroup = () => {
+  const handleCreateGroup = async () => {
     if (!groupName.trim()) {
       toast({
         title: "Group name required",
@@ -152,37 +154,69 @@ const Groups = () => {
       return;
     }
 
-    const members = mockFriends.filter((friend) => selectedFriendIds.includes(friend.id));
-    const newGroup: Group = {
-      id: `group-${Date.now()}`,
-      name: groupName.trim(),
-      description: groupDescription.trim() || undefined,
-      avatar: undefined,
-      adminIds: ["me"],
-      memberIds: members.map((member) => member.id),
-      members: members.map((member) => ({
-        id: member.id,
-        name: member.name,
-        email: member.email,
-        isOnline: member.isOnline,
-      })),
-      unreadCount: 0,
-      createdAt: new Date().toISOString(),
-    };
+    const currentUserId = getCurrentUserId();
+    if (!currentUserId) {
+      toast({
+        title: "Authentication required",
+        description: "Please log in to create a group.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-    setGroups((prev) => [newGroup, ...prev]);
-    setSelectedGroup(newGroup);
-    toast({
-      title: "Group created",
-      description: `${groupName.trim()} is ready for conversations.`,
-    });
+    setIsCreatingGroup(true);
 
-    setGroupName("");
-    setGroupDescription("");
-    setSelectedFriendIds([]);
-    setFriendQuery("");
-    setInviteEmail("");
-    setIsCreateGroupOpen(false);
+    try {
+      const response = await groupApi.createGroup({
+        name: groupName.trim(),
+        owner_id: currentUserId,
+        user_ids: selectedFriendIds,
+        is_open: false,
+      });
+
+      // Map API response to Group type
+      const newGroup: Group = {
+        id: response.id || response.group_id || `group-${Date.now()}`,
+        name: response.name || groupName.trim(),
+        description: response.description || groupDescription.trim() || undefined,
+        avatar: response.avatar,
+        adminIds: [currentUserId],
+        memberIds: response.member_ids || selectedFriendIds,
+        members: mockFriends
+          .filter((friend) => selectedFriendIds.includes(friend.id))
+          .map((member) => ({
+            id: member.id,
+            name: member.name,
+            email: member.email,
+            isOnline: member.isOnline,
+          })),
+        unreadCount: 0,
+        createdAt: response.created_at || new Date().toISOString(),
+      };
+
+      setGroups((prev) => [newGroup, ...prev]);
+      setSelectedGroup(newGroup);
+      toast({
+        title: "Group created",
+        description: `${groupName.trim()} is ready for conversations.`,
+      });
+
+      setGroupName("");
+      setGroupDescription("");
+      setSelectedFriendIds([]);
+      setFriendQuery("");
+      setInviteEmail("");
+      setIsCreateGroupOpen(false);
+    } catch (error: any) {
+      console.error("Error creating group:", error);
+      toast({
+        title: "Failed to create group",
+        description: error.response?.data?.detail || error.message || "An error occurred while creating the group.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreatingGroup(false);
+    }
   };
 
   const handleSendInvite = () => {
@@ -324,10 +358,12 @@ const Groups = () => {
                   </div>
                 </div>
                 <DialogFooter className="pt-4">
-                  <Button variant="ghost" onClick={() => setIsCreateGroupOpen(false)}>
+                  <Button variant="ghost" onClick={() => setIsCreateGroupOpen(false)} disabled={isCreatingGroup}>
                     Cancel
                   </Button>
-                  <Button onClick={handleCreateGroup}>Create group</Button>
+                  <Button onClick={handleCreateGroup} disabled={isCreatingGroup}>
+                    {isCreatingGroup ? "Creating..." : "Create group"}
+                  </Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>

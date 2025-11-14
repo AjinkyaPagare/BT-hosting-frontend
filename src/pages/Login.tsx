@@ -6,6 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { MessageSquare } from "lucide-react";
+import { loginUser } from "@/services/auth";
+import { isAxiosError } from "axios";
+import { useAuth } from "@/context/AuthContext";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -13,21 +16,39 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { refreshUser } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
-    // Simulate API call
-    setTimeout(() => {
-      localStorage.setItem("authToken", "demo-token");
+    try {
+      const { access_token, refresh_token } = await loginUser({ email, password });
+      localStorage.setItem("authToken", access_token);
+      localStorage.setItem("refreshToken", refresh_token);
+
+      await refreshUser();
+
       toast({
         title: "Welcome back!",
         description: "You have successfully logged in.",
       });
       navigate("/app/chats", { replace: true });
+    } catch (error) {
+      let description = "Unable to sign in. Please try again.";
+
+      if (isAxiosError(error)) {
+        description = error.response?.data?.detail ?? description;
+      }
+
+      toast({
+        title: "Login failed",
+        description,
+        variant: "destructive",
+      });
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (
