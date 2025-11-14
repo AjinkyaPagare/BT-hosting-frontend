@@ -6,6 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { MessageSquare } from "lucide-react";
+import { signupUser } from "@/services/auth";
+import { isAxiosError } from "axios";
 
 const Signup = () => {
   const [name, setName] = useState("");
@@ -29,15 +31,28 @@ const Signup = () => {
 
     setIsLoading(true);
 
-    setTimeout(() => {
-      localStorage.setItem("authToken", "demo-token");
+    try {
+      await signupUser({ name, email, password });
       toast({
         title: "Account created",
         description: "Welcome to Baap Connect!",
       });
-      navigate("/app/chats", { replace: true });
+      navigate("/login", { replace: true });
+    } catch (error) {
+      let description = "Unable to create account. Please try again.";
+
+      if (isAxiosError(error)) {
+        description = error.response?.data?.detail ?? description;
+      }
+
+      toast({
+        title: "Signup failed",
+        description,
+        variant: "destructive",
+      });
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (

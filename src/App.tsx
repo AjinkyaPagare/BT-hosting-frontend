@@ -2,6 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/context/ThemeContext";
+import { AuthProvider } from "@/context/AuthContext";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import AppLayout from "./layouts/AppLayout";
@@ -30,26 +31,28 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Landing />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Signup />} />
-            <Route path="/app" element={<AppLayout />}>
-              <Route index element={<Navigate to="chats" replace />} />
-              <Route path="chats" element={<Chats />} />
-              <Route path="chats/:chatId/info" element={<ChatInfo />} />
-              <Route path="groups" element={<Groups />} />
-              <Route path="groups/:groupId/info" element={<GroupInfo />} />
-              <Route path="groups/:groupId/media" element={<GroupMedia />} />
-              <Route path="friends" element={<Friends />} />
-              <Route path="calendar" element={<Calendar />} />
-              <Route path="files" element={<Files />} />
-              <Route path="notifications" element={<Notifications />} />
-              <Route path="settings" element={<Settings />} />
-              <Route path="profile" element={<Profile />} />
-            </Route>
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+          <AuthProvider>
+            <Routes>
+              <Route path="/" element={<Landing />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/signup" element={<Signup />} />
+              <Route path="/app" element={<AppLayout />}>
+                <Route index element={<Navigate to="chats" replace />} />
+                <Route path="chats" element={<Chats />} />
+                <Route path="chats/:chatId/info" element={<ChatInfo />} />
+                <Route path="groups" element={<Groups />} />
+                <Route path="groups/:groupId/info" element={<GroupInfo />} />
+                <Route path="groups/:groupId/media" element={<GroupMedia />} />
+                <Route path="friends" element={<Friends />} />
+                <Route path="calendar" element={<Calendar />} />
+                <Route path="files" element={<Files />} />
+                <Route path="notifications" element={<Notifications />} />
+                <Route path="settings" element={<Settings />} />
+                <Route path="profile" element={<Profile />} />
+              </Route>
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </AuthProvider>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>

@@ -8,13 +8,14 @@ import {
   UserPlus,
   Bell,
   Settings as SettingsIcon,
-  User,
   Menu,
   X,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Loader2 } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 
 const navigation = [
   { name: "Chats", href: "/app/chats", icon: MessageSquare },
@@ -27,21 +28,24 @@ const navigation = [
 ];
 
 const AppLayout = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const location = useLocation();
-
-  useEffect(() => {
-    const token = localStorage.getItem("authToken");
-    setIsAuthenticated(!!token);
-  }, [location]);
+  const { user, isLoading, logout } = useAuth();
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [location]);
 
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
   return (
@@ -91,7 +95,7 @@ const AppLayout = () => {
 
           {/* User Profile */}
           <div className="border-t border-sidebar-border p-4">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-2">
               <NavLink
                 to="/app/profile"
                 className="flex flex-1 items-center justify-center rounded-lg p-2 text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
@@ -99,9 +103,9 @@ const AppLayout = () => {
                 aria-label="Profile"
               >
                 <Avatar className="h-8 w-8">
-                  <AvatarImage src="" />
+                  <AvatarImage src={user.avatar ?? undefined} />
                   <AvatarFallback className="bg-primary text-primary-foreground">
-                    <User className="h-5 w-5" />
+                    {(user.name ?? "User").slice(0, 2).toUpperCase()}
                   </AvatarFallback>
                 </Avatar>
                 <span className="sr-only">View profile</span>
