@@ -240,7 +240,8 @@ const Groups = () => {
             name: f.name!,
             email: f.email!,
             isOnline: false, // Friends service doesn't provide online status
-          }));
+          }))
+          .filter((friend) => friend.id !== user?.id);
         setFriendResults(mapped);
       } catch (error) {
         console.error("Error loading friends:", error);
@@ -248,7 +249,7 @@ const Groups = () => {
     };
 
     loadFriends();
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     const query = friendQuery.trim();
@@ -262,12 +263,14 @@ const Groups = () => {
     const timeoutId = setTimeout(() => {
       searchUsers(query, controller.signal)
         .then((results) => {
-          const mapped: Friend[] = results.map((u) => ({
-            id: u.id,
-            name: u.name,
-            email: u.email,
-            isOnline: u.isOnline,
-          }));
+          const mapped: Friend[] = results
+            .map((u) => ({
+              id: u.id,
+              name: u.name,
+              email: u.email,
+              isOnline: u.isOnline,
+            }))
+            .filter((friend) => friend.id !== user?.id);
 
           setFriendResults(mapped);
         })
@@ -282,7 +285,7 @@ const Groups = () => {
       clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [friendQuery]);
+  }, [friendQuery, user?.id]);
 
   const filteredGroups = useMemo(() => {
     return groups.filter((group) => {
@@ -296,8 +299,8 @@ const Groups = () => {
   }, [groups, filter, searchQuery]);
 
   const filteredFriends = useMemo(() => {
-    return friendResults;
-  }, [friendResults]);
+    return friendResults.filter((friend) => friend.id !== user?.id);
+  }, [friendResults, user?.id]);
 
   const handleToggleFriend = (friend: Friend) => {
     setSelectedFriendIds((prev) => {
@@ -352,6 +355,15 @@ const Groups = () => {
       toast({
         title: "Authentication required",
         description: "Please log in to create a group.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (selectedFriendIds.length < 2) {
+      toast({
+        title: "Add more members",
+        description: "Select at least two other people to create a group.",
         variant: "destructive",
       });
       return;
