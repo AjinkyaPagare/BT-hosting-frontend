@@ -59,6 +59,10 @@ All colors MUST be HSL.
     --sidebar-border: 0 0% 90%;
     --sidebar-ring: 221 83% 53%;
 
+    --scrollbar-track: 0 0% 90%;
+    --scrollbar-thumb: 221 11% 70%;
+    --scrollbar-thumb-hover: 221 13% 55%;
+
     --transition-smooth: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
@@ -111,15 +115,42 @@ All colors MUST be HSL.
     --sidebar-accent-foreground: 0 0% 95%;
     --sidebar-border: 0 0% 20%;
     --sidebar-ring: 221 83% 53%;
+
+    --scrollbar-track: 0 0% 20%;
+    --scrollbar-thumb: 221 11% 35%;
+    --scrollbar-thumb-hover: 221 13% 45%;
   }
 }
 
 @layer base {
   * {
     @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--scrollbar-thumb)) hsl(var(--scrollbar-track));
   }
 
   body {
     @apply bg-background text-foreground;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: hsl(var(--scrollbar-track));
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--scrollbar-thumb));
+    border-radius: 999px;
+    border: 2px solid hsl(var(--scrollbar-track));
+    transition: var(--transition-smooth);
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--scrollbar-thumb-hover));
   }
 }
