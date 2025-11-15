@@ -31,17 +31,31 @@ export interface Chat {
   isPinned: boolean;
 }
 
+export interface GroupMember {
+  id: string;
+  userId: string;
+  name: string;
+  email?: string;
+  avatar?: string;
+  role: string;
+  joinedAt: string;
+  isOnline: boolean;
+  status?: string | null;
+}
+
 export interface Group {
   id: string;
   name: string;
-  description?: string;
   avatar?: string;
+  ownerId: string;
+  isOpen: boolean;
   adminIds: string[];
   memberIds: string[];
-  members: User[];
+  members: GroupMember[];
   lastMessage?: Message;
   unreadCount: number;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface FriendRequest {

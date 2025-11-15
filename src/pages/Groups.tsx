@@ -17,7 +17,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import MessageBubble from "@/components/MessageBubble";
-import { Group, Message } from "@/types";
+import type { Group, Message } from "@/types";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Search as SearchComponent } from "@/components/ui/Search";
@@ -43,7 +43,6 @@ const Groups = () => {
   const [messageInput, setMessageInput] = useState("");
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [groupName, setGroupName] = useState("");
-  const [groupDescription, setGroupDescription] = useState("");
   const [friendQuery, setFriendQuery] = useState("");
   const [friendResults, setFriendResults] = useState<Friend[]>([]);
   const [selectedFriends, setSelectedFriends] = useState<Friend[]>([]);
@@ -81,67 +80,11 @@ const Groups = () => {
       try {
         console.log("Loading groups for user:", user.id);
         const groupsList = await groupApi.getGroupsList(user.id);
-        console.log("Received groups list:", groupsList);
-        
-        if (!groupsList || groupsList.length === 0) {
-          console.warn("No groups returned from API. This might mean:");
-          console.warn("1. The user has no groups yet");
-          console.warn("2. The API endpoint doesn't exist or returned empty");
-          console.warn("3. Check the browser console and network tab for API errors");
+        console.log(`Received ${groupsList.length} groups`);
+        if (groupsList.length === 0) {
+          console.warn("No groups returned from API. The user may have no memberships yet.");
         }
-        
-        const mapped: Group[] = groupsList.map((g) => {
-          const groupId = g.id || g.group_id || "";
-          if (!groupId) {
-            console.warn("Group missing ID:", g);
-          }
-          
-          // Map members array if available
-          const membersArray = g.members?.map((m) => ({
-            id: m.id,
-            name: m.name,
-            email: m.email,
-            isOnline: m.isOnline ?? false,
-          })) || [];
-          
-          // Get member IDs from members array or from member_ids field
-          const memberIdsFromMembers = membersArray.map(m => m.id);
-          const memberIdsFromField = g.member_ids || [];
-          // Combine both sources and remove duplicates
-          const allMemberIds = Array.from(new Set([...memberIdsFromMembers, ...memberIdsFromField]));
-          
-          // If we have members array, use its length; otherwise use member_ids length
-          const memberCount = membersArray.length > 0 ? membersArray.length : allMemberIds.length;
-          
-          console.log(`Group ${g.name}: members array length=${membersArray.length}, member_ids length=${memberIdsFromField.length}, final count=${memberCount}`);
-          
-          return {
-            id: groupId,
-            name: g.name || "Unnamed Group",
-            description: g.description,
-            avatar: g.avatar,
-            adminIds: g.admin_ids || (g.owner_id ? [g.owner_id] : []),
-            memberIds: allMemberIds,
-            members: membersArray,
-            lastMessage: g.last_message
-              ? {
-                  id: g.last_message.id,
-                  chatId: groupId,
-                  senderId: g.last_message.sender_id,
-                  content: g.last_message.content,
-                  type: "text" as const,
-                  timestamp: g.last_message.timestamp,
-                  isRead: false,
-                  isDelivered: true,
-                }
-              : undefined,
-            unreadCount: g.unread_count || 0,
-            createdAt: g.created_at || new Date().toISOString(),
-          };
-        });
-        
-        console.log(`Mapped ${mapped.length} groups to display`);
-        setGroups(mapped);
+        setGroups(groupsList);
       } catch (error) {
         console.error("Error loading groups:", error);
         console.error("Full error details:", error);
@@ -158,19 +101,17 @@ const Groups = () => {
     loadGroups();
   }, [user?.id, toast]);
 
-  // Load friends list when component mounts
   useEffect(() => {
     const loadFriends = async () => {
       try {
         const friendsList = await friendsService.getFriendList();
-        const mapped: Friend[] = friendsList
-          .filter((f) => f.id && f.name && f.email)
-          .map((f) => ({
-            id: f.id!,
-            name: f.name!,
-            email: f.email!,
-            isOnline: false, // Friends service doesn't provide online status
-          }));
+        const filteredFriends = friendsList.filter((f) => f.id && f.name && f.email);
+        const mapped: Friend[] = filteredFriends.map((f) => ({
+          id: f.id!,
+          name: f.name!,
+          email: f.email!,
+          isOnline: false, // Friends service doesn't provide online status
+        }));
         setFriendResults(mapped);
       } catch (error) {
         console.error("Error loading friends:", error);
@@ -338,104 +279,20 @@ const Groups = () => {
 
       console.log("Creating group with data:", requestPayload);
 
-      const response = await groupApi.createGroup(requestPayload);
+      const createdGroup = await groupApi.createGroup(requestPayload);
 
-      console.log("Group created successfully:", response);
+      console.log("Group created successfully:", createdGroup);
 
-      // Map API response to Group type
-      const newGroup: Group = {
-        id: response.id || response.group_id || `group-${Date.now()}`,
-        name: response.name || groupName.trim(),
-        description: response.description || groupDescription.trim() || undefined,
-        avatar: response.avatar,
-        adminIds: [user.id],
-        memberIds: response.member_ids || validUserIds,
-        members: response.members
-          ? response.members.map((m) => ({
-              id: m.id,
-              name: m.name,
-              email: m.email,
-              isOnline: m.isOnline ?? false,
-            }))
-          : selectedFriends.map((member) => ({
-              id: member.id,
-              name: member.name,
-              email: member.email,
-              isOnline: member.isOnline,
-            })),
-        unreadCount: 0,
-        createdAt: response.created_at || new Date().toISOString(),
-      };
-
-      // Immediately add the new group to the list so it shows up right away
-      setGroups((prev) => {
-        // Check if group already exists to avoid duplicates
-        const exists = prev.some((g) => g.id === newGroup.id);
-        if (exists) {
-          return prev.map((g) => (g.id === newGroup.id ? newGroup : g));
-        }
-        return [newGroup, ...prev];
-      });
-      setSelectedGroup(newGroup);
+      setGroups((prev) => [createdGroup, ...prev.filter((group) => group.id !== createdGroup.id)]);
+      setSelectedGroup(createdGroup);
 
       // Try to refresh groups list from API in the background
       // This ensures we have the latest data, but doesn't block the UI
       try {
-        const groupsList = await groupApi.getGroupsList(user.id);
-        if (groupsList && groupsList.length > 0) {
-          const mapped: Group[] = groupsList.map((g) => {
-            const groupId = g.id || g.group_id || "";
-            
-            // Map members array if available
-            const membersArray = g.members?.map((m) => ({
-              id: m.id,
-              name: m.name,
-              email: m.email,
-              isOnline: m.isOnline ?? false,
-            })) || [];
-            
-            // Get member IDs from members array or from member_ids field
-            const memberIdsFromMembers = membersArray.map(m => m.id);
-            const memberIdsFromField = g.member_ids || [];
-            // Combine both sources and remove duplicates
-            const allMemberIds = Array.from(new Set([...memberIdsFromMembers, ...memberIdsFromField]));
-            
-            return {
-              id: groupId,
-              name: g.name,
-              description: g.description,
-              avatar: g.avatar,
-              adminIds: g.admin_ids || (g.owner_id ? [g.owner_id] : []),
-              memberIds: allMemberIds,
-              members: membersArray,
-              lastMessage: g.last_message
-                ? {
-                    id: g.last_message.id,
-                    chatId: groupId,
-                    senderId: g.last_message.sender_id,
-                    content: g.last_message.content,
-                    type: "text" as const,
-                    timestamp: g.last_message.timestamp,
-                    isRead: false,
-                    isDelivered: true,
-                  }
-                : undefined,
-              unreadCount: g.unread_count || 0,
-              createdAt: g.created_at || new Date().toISOString(),
-            };
-          });
-          
-          // Update groups list, ensuring the new group is included
-          setGroups((prev) => {
-            const existingIds = new Set(prev.map((g) => g.id));
-            const newGroups = mapped.filter((g) => !existingIds.has(g.id));
-            return [...newGroups, ...prev];
-          });
-          
-          // Select the newly created group
-          const createdGroup = mapped.find((g) => g.id === newGroup.id) || newGroup;
-          setSelectedGroup(createdGroup);
-        }
+        const refreshedGroups = await groupApi.getGroupsList(user.id);
+        setGroups(refreshedGroups);
+        const latestCreated = refreshedGroups.find((g) => g.id === createdGroup.id) || createdGroup;
+        setSelectedGroup(latestCreated);
       } catch (error) {
         // If refresh fails, that's okay - we already added the group locally
         console.warn("Could not refresh groups list from API, using local group:", error);
@@ -447,7 +304,6 @@ const Groups = () => {
       });
 
       setGroupName("");
-      setGroupDescription("");
       setSelectedFriendIds([]);
       setSelectedFriends([]);
       setFriendQuery("");
@@ -541,18 +397,15 @@ const Groups = () => {
                   </DialogDescription>
                 </DialogHeader>
                 <div className="flex-1 overflow-y-auto space-y-6 pr-1 p-3">
-                  <div className="space-y-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="group-name">Group name</Label>
-                      <Input
-                        id="group-name"
-                        placeholder="Product Launch"
-                        value={groupName}
-                        onChange={(e) => setGroupName(e.target.value)}
-                      />
-                    </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="group-name">Group name</Label>
+                    <Input
+                      id="group-name"
+                      placeholder="Product Launch"
+                      value={groupName}
+                      onChange={(e) => setGroupName(e.target.value)}
+                    />
                   </div>
-                  <Separator />
 
                   <div className="space-y-3">
                     <Label htmlFor="group-member-search">Add members</Label>
@@ -671,7 +524,7 @@ const Groups = () => {
                 </div>
                 <div className="flex items-center justify-between">
                   <p className="text-sm text-muted-foreground truncate">
-                    {group.lastMessage?.content || group.description || "No messages yet"}
+                    {group.lastMessage?.content || `${group.members.length} members`}
                   </p>
                   {group.unreadCount > 0 && (
                     <Badge className="ml-2 shrink-0 bg-primary text-primary-foreground">
