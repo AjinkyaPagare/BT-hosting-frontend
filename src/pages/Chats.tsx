@@ -160,17 +160,19 @@ const Chats = () => {
     };
     load();
   }, [selectedChat?.user.id, toast]);
- 
+
   // Real-time: connect to direct chat WebSocket using current user id
   useEffect(() => {
     if (!user?.id) return;
- 
+
     const conn = wsService.connectDirect(user.id, {
       onMessage: (data) => {
         if (!data || typeof data !== "object") return;
         if (data.type === "direct_message" && data.payload) {
           try {
             const p: any = data.payload;
+            // safety: if backend accidentally includes group_id, do not show in direct chat
+            if (p.group_id) return;
             const peerId = p.sender_id === user.id ? p.receiver_id : p.sender_id;
             // only append if the message belongs to the currently selected chat
             if (!selectedChat?.user.id || peerId !== selectedChat.user.id) return;
@@ -186,11 +188,12 @@ const Chats = () => {
         }
       },
     });
- 
+
     return () => {
       conn.close();
     };
   }, [user?.id, selectedChat?.user.id]);
+
  
   const filteredChats = useMemo(() => {
     return chats.filter((chat) => {

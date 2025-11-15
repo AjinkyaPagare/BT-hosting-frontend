@@ -75,7 +75,9 @@ export const chatService = {
       { params: { limit, offset } }
     );
     const list = Array.isArray(data) ? data : (data?.data ?? []);
-    return list.map(mapBackendToUi);
+    // some backends may return group messages in this endpoint; ignore any that have group_id
+    const directOnly = list.filter((m) => !m.group_id);
+    return directOnly.map(mapBackendToUi);
   },
  
   sendDirectMessage: async (payload: SendDirectMessageRequest): Promise<Message> => {
