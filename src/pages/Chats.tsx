@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Paperclip, Send, Smile, Info, Phone, Video, Plus, ArrowLeft, Loader2, Ban } from "lucide-react";
@@ -24,50 +24,23 @@ import { Chat, Message, FriendRequest as FriendRequestType, FriendListItem } fro
 import { useToast } from "@/hooks/use-toast";
 import { friendsService } from "@/services/friends";
 import api from "@/services/api";
-
+import { useAuth } from "@/context/AuthContext";
+import { chatService, mapBackendToUi } from "@/services/chat";
+import { filesService } from "@/services/files";
+import { wsService } from "@/services/ws";
+ 
 type Friend = {
   id: string;
   name: string;
   email: string;
   isOnline: boolean;
 };
-
-const mockMessages: Message[] = [
-  {
-    id: "1",
-    chatId: "1",
-    senderId: "user1",
-    content: "Hi there! How's your day going?",
-    type: "text",
-    timestamp: new Date(Date.now() - 7200000).toISOString(),
-    isRead: true,
-    isDelivered: true,
-  },
-  {
-    id: "2",
-    chatId: "1",
-    senderId: "me",
-    content: "Hey! It's going great, thanks for asking!",
-    type: "text",
-    timestamp: new Date(Date.now() - 7100000).toISOString(),
-    isRead: true,
-    isDelivered: true,
-  },
-  {
-    id: "3",
-    chatId: "1",
-    senderId: "user1",
-    content: "That's wonderful to hear!",
-    type: "text",
-    timestamp: new Date(Date.now() - 3600000).toISOString(),
-    isRead: false,
-    isDelivered: true,
-  },
-];
-
+ 
+// messages are loaded from API
+ 
 const Chats = () => {
   const queryClient = useQueryClient();
-
+ 
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
@@ -79,7 +52,11 @@ const Chats = () => {
   const [isDesktop, setIsDesktop] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
-
+  const { user } = useAuth();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const seenMessageIdsRef = useRef<Set<string>>(new Set());
+ 
   const {
     data: pendingRequests = [],
     isLoading: isPendingLoading,
@@ -89,7 +66,7 @@ const Chats = () => {
     queryKey: ["friends", "pending"],
     queryFn: friendsService.getPendingRequests,
   });
-
+ 
   const {
     data: friendList = [],
     isLoading: isFriendsLoading,
@@ -99,7 +76,7 @@ const Chats = () => {
     queryKey: ["friends", "list"],
     queryFn: friendsService.getFriendList,
   });
-
+ 
   const {
     data: sentRequests = [],
     isLoading: isSentLoading,
@@ -109,7 +86,7 @@ const Chats = () => {
     queryKey: ["friends", "sent"],
     queryFn: friendsService.getSentRequests,
   });
-
+ 
   const chats = useMemo<Chat[]>(
     () =>
       friendList.map((friend: FriendListItem) => ({
@@ -126,25 +103,25 @@ const Chats = () => {
       })),
     [friendList]
   );
-
+ 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
     [chats, selectedChatId]
   );
-
+ 
   useEffect(() => {
     const handleResize = () => setIsDesktop(window.innerWidth >= 768);
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-
+ 
   useEffect(() => {
     if (isDesktop && !selectedChatId && chats[0]) {
       setSelectedChatId(chats[0].id);
     }
   }, [isDesktop, selectedChatId, chats]);
-
+ 
   useEffect(() => {
     if (selectedChatId && !chats.some((chat) => chat.id === selectedChatId)) {
       setSelectedChatId(chats[0]?.id ?? null);
@@ -153,7 +130,68 @@ const Chats = () => {
       setSelectedChatId(chats[0].id);
     }
   }, [chats, selectedChatId]);
-
+ 
+  // Load direct messages when chat changes
+  useEffect(() => {
+    const load = async () => {
+      if (!selectedChat?.user.id) {
+        setMessages([]);
+        seenMessageIdsRef.current = new Set();
+        return;
+      }
+      try {
+        const history = await chatService.listDirectMessages(selectedChat.user.id, 200, 0);
+        const seen = new Set<string>();
+        const unique = history.filter((m) => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        });
+        setMessages(unique);
+        seenMessageIdsRef.current = seen;
+      } catch (error: any) {
+        console.error("Error loading direct messages:", error);
+        toast({
+          title: "Failed to load messages",
+          description: error?.response?.data?.detail || error?.message || "Unable to load messages",
+          variant: "destructive",
+        });
+      }
+    };
+    load();
+  }, [selectedChat?.user.id, toast]);
+ 
+  // Real-time: connect to direct chat WebSocket using current user id
+  useEffect(() => {
+    if (!user?.id) return;
+ 
+    const conn = wsService.connectDirect(user.id, {
+      onMessage: (data) => {
+        if (!data || typeof data !== "object") return;
+        if (data.type === "direct_message" && data.payload) {
+          try {
+            const p: any = data.payload;
+            const peerId = p.sender_id === user.id ? p.receiver_id : p.sender_id;
+            // only append if the message belongs to the currently selected chat
+            if (!selectedChat?.user.id || peerId !== selectedChat.user.id) return;
+            const ui = mapBackendToUi(p);
+            // ensure chatId matches our chat model (peer id)
+            ui.chatId = String(peerId);
+            if (seenMessageIdsRef.current.has(ui.id)) return;
+            seenMessageIdsRef.current.add(ui.id);
+            setMessages((prev) => [...prev, ui]);
+          } catch (e) {
+            // ignore malformed frames
+          }
+        }
+      },
+    });
+ 
+    return () => {
+      conn.close();
+    };
+  }, [user?.id, selectedChat?.user.id]);
+ 
   const filteredChats = useMemo(() => {
     return chats.filter((chat) => {
       const matchesSearch = chat.user.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -164,7 +202,7 @@ const Chats = () => {
       return matchesSearch && matchesFilter;
     });
   }, [chats, filter, searchQuery]);
-
+ 
   const pendingChatItems = useMemo(
     () =>
       sentRequests.map((request) => ({
@@ -175,7 +213,7 @@ const Chats = () => {
       })),
     [sentRequests]
   );
-
+ 
   const filteredPendingChats = useMemo(() => {
     if (filter !== "all") return [];
     const query = searchQuery.trim().toLowerCase();
@@ -184,7 +222,7 @@ const Chats = () => {
       item.name.toLowerCase().includes(query) || item.email.toLowerCase().includes(query)
     );
   }, [filter, pendingChatItems, searchQuery]);
-
+ 
   const filteredIncomingRequests = useMemo(() => {
     if (filter !== "all") return [];
     const query = searchQuery.trim().toLowerCase();
@@ -195,17 +233,17 @@ const Chats = () => {
       return name.includes(query) || email.includes(query);
     });
   }, [filter, pendingRequests, searchQuery]);
-
+ 
   const shouldShowPendingSections = filter === "all";
-
+ 
   useEffect(() => {
     const query = friendQuery.trim();
-
+ 
     if (!query) {
       setFriendResults([]);
       return;
     }
-
+ 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       api
@@ -223,7 +261,7 @@ const Chats = () => {
               isOnline: Boolean(u.isOnline ?? false),
             }))
             .filter((u) => u.id && u.name);
-
+ 
           setFriendResults(mapped);
         })
         .catch((error) => {
@@ -232,22 +270,22 @@ const Chats = () => {
           }
         });
     }, 300);
-
+ 
     return () => {
       clearTimeout(timeoutId);
       controller.abort();
     };
   }, [friendQuery]);
-
+ 
   const invalidateFriendQueries = () => {
     queryClient.invalidateQueries({ queryKey: ["friends", "pending"] });
     queryClient.invalidateQueries({ queryKey: ["friends", "list"] });
     queryClient.invalidateQueries({ queryKey: ["friends", "sent"] });
     queryClient.invalidateQueries({ queryKey: ["friends", "blocked"] });
   };
-
+ 
   const [actingRequestId, setActingRequestId] = useState<string | null>(null);
-
+ 
   const acceptMutation = useMutation({
     mutationFn: friendsService.acceptRequest,
     onMutate: (requestId: string) => {
@@ -268,7 +306,7 @@ const Chats = () => {
       setActingRequestId(null);
     },
   });
-
+ 
   const rejectMutation = useMutation({
     mutationFn: friendsService.rejectRequest,
     onMutate: (requestId: string) => {
@@ -289,7 +327,7 @@ const Chats = () => {
       setActingRequestId(null);
     },
   });
-
+ 
   const sendRequestMutation = useMutation({
     mutationFn: friendsService.sendRequest,
     onSuccess: (data) => {
@@ -310,7 +348,7 @@ const Chats = () => {
       });
     },
   });
-
+ 
   const blockFriendMutation = useMutation({
     mutationFn: friendsService.blockFriend,
     onSuccess: (data) => {
@@ -329,10 +367,10 @@ const Chats = () => {
       });
     },
   });
-
+ 
   const handleSendFriendRequest = (friendId: string) => {
     if (!friendId) return;
-
+ 
     const existingChat = chats.find((chat) => chat.userId === friendId);
     if (existingChat) {
       setSelectedChatId(existingChat.id);
@@ -343,7 +381,7 @@ const Chats = () => {
       setIsCreateChatOpen(false);
       return;
     }
-
+ 
     const alreadySent = sentRequests.some(
       (request) => request.receiverId === friendId && request.status === "pending"
     );
@@ -354,23 +392,112 @@ const Chats = () => {
       });
       return;
     }
-
+ 
     sendRequestMutation.mutate(friendId);
   };
-
-  const handleSendMessage = () => {
-    if (!messageInput.trim()) return;
-    // Handle message send
+ 
+  const handleSendMessage = async () => {
+    if (!messageInput.trim() || !selectedChat?.user.id || !user?.id) return;
+ 
+    const temp: Message = {
+      id: `temp-${Date.now()}`,
+      chatId: selectedChat.id,
+      senderId: user.id,
+      content: messageInput,
+      type: "text",
+      timestamp: new Date().toISOString(),
+      isRead: false,
+      isDelivered: false,
+    };
+    setMessages((prev) => [...prev, temp]);
     setMessageInput("");
+ 
+    try {
+      const sent = await chatService.sendDirectMessage({
+        user_id: user.id,
+        receiver_id: selectedChat.user.id,
+        content: temp.content,
+      });
+      // Mark final ID to avoid WS duplicate
+      seenMessageIdsRef.current.add(sent.id);
+      setMessages((prev) => {
+        const already = prev.some((m) => m.id === sent.id);
+        if (already) {
+          // WS delivered first -> drop temp
+          return prev.filter((m) => m.id !== temp.id);
+        }
+        return prev.map((m) => (m.id === temp.id ? sent : m));
+      });
+    } catch (error: any) {
+      console.error("Error sending direct message:", error);
+      setMessages((prev) => prev.filter((m) => m.id !== temp.id));
+      toast({
+        title: "Failed to send",
+        description: error?.response?.data?.detail || error?.message || "Message not sent",
+        variant: "destructive",
+      });
+    }
   };
-
+ 
+  const openFilePicker = () => fileInputRef.current?.click();
+ 
+  const handleFileSelected: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedChat?.user.id || !user?.id) return;
+ 
+    const tempId = `temp-file-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId,
+      chatId: selectedChat.id,
+      senderId: user.id,
+      content: messageInput || "",
+      type: file.type.startsWith("image/") ? "image" : "file",
+      fileUrl: undefined,
+      fileName: file.name,
+      timestamp: new Date().toISOString(),
+      isRead: false,
+      isDelivered: false,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+ 
+    try {
+      const uploaded = await filesService.upload(file);
+      const sent = await chatService.sendDirectMessage({
+        user_id: user.id,
+        receiver_id: selectedChat.user.id,
+        content: messageInput || undefined,
+        file_url: uploaded.path,
+        file_name: uploaded.originalFilename,
+        file_type: file.type || undefined,
+      });
+      seenMessageIdsRef.current.add(sent.id);
+      setMessages((prev) => {
+        const already = prev.some((m) => m.id === sent.id);
+        if (already) {
+          return prev.filter((m) => m.id !== tempId);
+        }
+        return prev.map((m) => (m.id === tempId ? sent : m));
+      });
+    } catch (error: any) {
+      console.error("Error uploading/sending file:", error);
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      toast({
+        title: "File send failed",
+        description: error?.response?.data?.detail || error?.message || "Could not send the file",
+        variant: "destructive",
+      });
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setMessageInput("");
+    }
+  };
+ 
   const handleBlockFriend = (friendId: string) => {
     if (!friendId || blockFriendMutation.isPending) {
       return;
     }
     blockFriendMutation.mutate(friendId);
   };
-
   const formatRequestDate = (request: FriendRequestType) => {
     try {
       return new Date(request.createdAt).toLocaleString();
@@ -378,7 +505,7 @@ const Chats = () => {
       return "";
     }
   };
-
+ 
   return (
     <div className="flex h-full flex-col gap-4 md:flex-row md:gap-0 md:overflow-hidden">
       {/* Chat List */}
@@ -476,7 +603,7 @@ const Chats = () => {
             }
           />
         </div>
-
+ 
         <div className="flex-1 overflow-y-auto space-y-4 p-4 pt-0">
           {shouldShowPendingSections && (
             <div className="space-y-6">
@@ -534,7 +661,7 @@ const Chats = () => {
                   </div>
                 )}
               </div>
-
+ 
               <div className="space-y-2">
                 {(isSentLoading || isSentFetching) && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -569,7 +696,7 @@ const Chats = () => {
               </div>
             </div>
           )}
-
+ 
           {(isFriendsLoading || isFriendsFetching) && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -592,7 +719,7 @@ const Chats = () => {
           ))}
         </div>
       </div>
-
+ 
       {/* Chat Window */}
       {selectedChat ? (
         <div className="flex-1 flex flex-col bg-background border border-border rounded-lg md:border-none md:rounded-none">
@@ -640,20 +767,20 @@ const Chats = () => {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => navigate(`/app/chats/${selectedChat.id}/info`)}
+                onClick={() => navigate(`/app/chats/${selectedChat.user.id}/info`)}
               >
                 <Info className="h-5 w-5" />
               </Button>
             </div>
           </div>
-
+ 
           {/* Messages Area */}
           <div className="flex-1 overflow-y-auto p-4 space-y-2">
-            {mockMessages.map((message) => (
+            {messages.map((message) => (
               <MessageBubble
                 key={message.id}
                 message={message}
-                isSent={message.senderId === "me"}
+                isSent={message.senderId === user?.id}
               />
             ))}
             {isTyping && (
@@ -668,13 +795,14 @@ const Chats = () => {
               </div>
             )}
           </div>
-
+ 
           {/* Message Input */}
           <div className="border-t border-border p-4 bg-card">
             <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
-              <Button variant="ghost" size="icon" className="order-2 md:order-1">
+              <Button variant="ghost" size="icon" className="order-2 md:order-1" onClick={openFilePicker}>
                 <Paperclip className="h-5 w-5" />
               </Button>
+              <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelected} />
               <Input
                 placeholder="Type a message..."
                 value={messageInput}
@@ -702,5 +830,7 @@ const Chats = () => {
     </div>
   );
 };
-
+ 
 export default Chats;
+ 
+ 
