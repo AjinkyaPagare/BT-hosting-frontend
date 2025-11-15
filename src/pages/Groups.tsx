@@ -26,6 +26,9 @@ import { groupApi } from "@/services/group_apis";
 import { searchUsers } from "@/services/search";
 import { useAuth } from "@/context/AuthContext";
 import { friendsService } from "@/services/friends";
+import { chatService, mapBackendToUi } from "@/services/chat";
+import { filesService } from "@/services/files";
+import { wsService } from "@/services/ws";
 
 type Friend = {
   id: string;
@@ -33,7 +36,7 @@ type Friend = {
   email: string;
   isOnline: boolean;
 };
-
+ 
 const Groups = () => {
   const [groups, setGroups] = useState<Group[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -54,20 +57,80 @@ const Groups = () => {
   const { toast } = useToast();
   const { user } = useAuth();
   const friendSearchInputRef = useRef<HTMLInputElement | null>(null);
-
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const seenMessageIdsRef = useRef<Set<string>>(new Set());
+ 
   useEffect(() => {
     const handleResize = () => setIsDesktop(window.innerWidth >= 768);
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-
+ 
   useEffect(() => {
     if (isDesktop && !selectedGroup && groups[0]) {
       setSelectedGroup(groups[0]);
     }
   }, [isDesktop, selectedGroup, groups]);
-
+ 
+  // Load messages for selected group
+  useEffect(() => {
+    const loadGroupMessages = async () => {
+      if (!selectedGroup?.id || !user?.id) {
+        setMessages([]);
+        seenMessageIdsRef.current = new Set();
+        return;
+      }
+      try {
+        const history = await chatService.listGroupMessages(selectedGroup.id, 500, 0);
+        const seen = new Set<string>();
+        const unique = history.filter((m) => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        });
+        setMessages(unique);
+        seenMessageIdsRef.current = seen;
+      } catch (error: any) {
+        console.error("Error loading group messages:", error);
+        toast({
+          title: "Failed to load messages",
+          description:
+            error?.response?.data?.detail || error?.message || "Unable to load group messages",
+          variant: "destructive",
+        });
+      }
+    };
+    loadGroupMessages();
+  }, [selectedGroup?.id, user?.id, toast]);
+ 
+  // Real-time: connect to group WebSocket when a group is selected
+  useEffect(() => {
+    if (!user?.id || !selectedGroup?.id) return;
+ 
+    const conn = wsService.connectGroup(selectedGroup.id, user.id, {
+      onMessage: (data) => {
+        if (!data || typeof data !== "object") return;
+        if (data.type === "group_message" && data.payload) {
+          try {
+            const ui = mapBackendToUi(data.payload as any);
+            // ensure this message belongs to the currently selected group
+            if (ui.chatId !== selectedGroup.id) return;
+            if (seenMessageIdsRef.current.has(ui.id)) return;
+            seenMessageIdsRef.current.add(ui.id);
+            setMessages((prev) => [...prev, ui]);
+          } catch (e) {
+            // ignore bad frames
+          }
+        }
+      },
+    });
+ 
+    return () => {
+      conn.close();
+    };
+  }, [user?.id, selectedGroup?.id]);
+ 
   // Load groups list when component mounts
   useEffect(() => {
     const loadGroups = async () => {
@@ -75,16 +138,80 @@ const Groups = () => {
         setIsLoadingGroups(false);
         return;
       }
-
+ 
       setIsLoadingGroups(true);
       try {
         console.log("Loading groups for user:", user.id);
         const groupsList = await groupApi.getGroupsList(user.id);
-        console.log(`Received ${groupsList.length} groups`);
-        if (groupsList.length === 0) {
-          console.warn("No groups returned from API. The user may have no memberships yet.");
+        console.log("Received groups list:", groupsList);
+       
+        if (!groupsList || groupsList.length === 0) {
+          console.warn("No groups returned from API. This might mean:");
+          console.warn("1. The user has no groups yet");
+          console.warn("2. The API endpoint doesn't exist or returned empty");
+          console.warn("3. Check the browser console and network tab for API errors");
         }
-        setGroups(groupsList);
+
+        const mapped: Group[] = groupsList.map((g: any) => {
+          const groupId = g.id || g.group_id || "";
+
+          if (!groupId) {
+            console.warn("Group missing ID:", g);
+          }
+
+          // Map members array if available
+          const membersArray = g.members?.map((m) => ({
+            id: m.id,
+            name: m.name,
+            email: m.email,
+            isOnline: m.isOnline ?? false,
+          })) || [];
+
+          // Get member IDs from members array or from member_ids field
+          const memberIdsFromMembers = membersArray.map((m) => m.id);
+          const memberIdsFromField = g.member_ids || [];
+          // Combine both sources and remove duplicates
+          const allMemberIds = Array.from(new Set([...memberIdsFromMembers, ...memberIdsFromField]));
+
+          // If we have members array, use its length; otherwise use member_ids length
+          const memberCount = membersArray.length > 0 ? membersArray.length : allMemberIds.length;
+
+          console.log(`Group ${g.name}: members array length=${membersArray.length}, member_ids length=${memberIdsFromField.length}, final count=${memberCount}`);
+
+          return {
+            id: groupId,
+            name: g.name || "Unnamed Group",
+            avatar: g.avatar,
+            ownerId: g.owner_id || g.ownerId || "",
+            isOpen: g.is_open ?? g.isOpen ?? false,
+            adminIds: g.admin_ids || (g.owner_id ? [g.owner_id] : []),
+            memberIds: allMemberIds,
+            members: membersArray,
+
+            lastMessage: g.last_message
+              ? {
+                  id: g.last_message.id,
+                  chatId: groupId,
+                  senderId: g.last_message.sender_id,
+                  content: g.last_message.content,
+                  type: "text" as const,
+                  timestamp: g.last_message.timestamp,
+                  isRead: false,
+                  isDelivered: true,
+                }
+              : undefined,
+            unreadCount: g.unread_count || 0,
+            createdAt: g.created_at || new Date().toISOString(),
+            updatedAt:
+              g.updated_at ||
+              g.updatedAt ||
+              g.created_at ||
+              new Date().toISOString(),
+          };
+        });
+
+        console.log(`Mapped ${mapped.length} groups to display`);
+        setGroups(mapped);
       } catch (error) {
         console.error("Error loading groups:", error);
         console.error("Full error details:", error);
@@ -101,17 +228,19 @@ const Groups = () => {
     loadGroups();
   }, [user?.id, toast]);
 
+  // Load friends list when component mounts
   useEffect(() => {
     const loadFriends = async () => {
       try {
         const friendsList = await friendsService.getFriendList();
-        const filteredFriends = friendsList.filter((f) => f.id && f.name && f.email);
-        const mapped: Friend[] = filteredFriends.map((f) => ({
-          id: f.id!,
-          name: f.name!,
-          email: f.email!,
-          isOnline: false, // Friends service doesn't provide online status
-        }));
+        const mapped: Friend[] = friendsList
+          .filter((f) => f.id && f.name && f.email)
+          .map((f) => ({
+            id: f.id!,
+            name: f.name!,
+            email: f.email!,
+            isOnline: false, // Friends service doesn't provide online status
+          }));
         setFriendResults(mapped);
       } catch (error) {
         console.error("Error loading friends:", error);
@@ -248,7 +377,7 @@ const Groups = () => {
       }
 
       // Validate user ID format (should be UUID)
-      if (!user.id || typeof user.id !== 'string' || user.id.trim() === '') {
+      if (!user.id || typeof user.id !== "string" || user.id.trim() === "") {
         toast({
           title: "Invalid user ID",
           description: "User ID is missing or invalid. Please log in again.",
@@ -259,7 +388,7 @@ const Groups = () => {
       }
 
       // Validate user_ids array contains valid UUIDs
-      const validUserIds = userIds.filter(id => id && typeof id === 'string' && id.trim() !== '');
+      const validUserIds = userIds.filter((id) => id && typeof id === "string" && id.trim() !== "");
       if (validUserIds.length === 0) {
         toast({
           title: "Invalid members",
@@ -279,20 +408,44 @@ const Groups = () => {
 
       console.log("Creating group with data:", requestPayload);
 
-      const createdGroup = await groupApi.createGroup(requestPayload);
+      const response = await groupApi.createGroup(requestPayload);
 
-      console.log("Group created successfully:", createdGroup);
+      console.log("Group created successfully:", response);
 
-      setGroups((prev) => [createdGroup, ...prev.filter((group) => group.id !== createdGroup.id)]);
-      setSelectedGroup(createdGroup);
+      // Use the normalized Group returned by the API
+      const newGroup: Group = {
+        ...response,
+      };
+
+      // Immediately add the new group to the list so it shows up right away
+      setGroups((prev) => {
+        // Check if group already exists to avoid duplicates
+        const exists = prev.some((g) => g.id === newGroup.id);
+        if (exists) {
+          return prev.map((g) => (g.id === newGroup.id ? newGroup : g));
+        }
+        return [newGroup, ...prev];
+      });
+      setSelectedGroup(newGroup);
 
       // Try to refresh groups list from API in the background
       // This ensures we have the latest data, but doesn't block the UI
       try {
-        const refreshedGroups = await groupApi.getGroupsList(user.id);
-        setGroups(refreshedGroups);
-        const latestCreated = refreshedGroups.find((g) => g.id === createdGroup.id) || createdGroup;
-        setSelectedGroup(latestCreated);
+        const groupsList = await groupApi.getGroupsList(user.id);
+        if (groupsList && groupsList.length > 0) {
+          // Update groups list, ensuring the new group is included and refreshed
+          setGroups((prev) => {
+            const existingIds = new Set(prev.map((g) => g.id));
+            const merged = groupsList.map((g) =>
+              existingIds.has(g.id) ? { ...g, ...(prev.find((p) => p.id === g.id) || {}) } : g
+            );
+            return merged;
+          });
+
+          // Select the newly created group if it exists in the refreshed list
+          const createdGroup = groupsList.find((g) => g.id === newGroup.id) || newGroup;
+          setSelectedGroup(createdGroup);
+        }
       } catch (error) {
         // If refresh fails, that's okay - we already added the group locally
         console.warn("Could not refresh groups list from API, using local group:", error);
@@ -304,6 +457,7 @@ const Groups = () => {
       });
 
       setGroupName("");
+      // setGroupDescription("");
       setSelectedFriendIds([]);
       setSelectedFriends([]);
       setFriendQuery("");
@@ -313,15 +467,15 @@ const Groups = () => {
       console.error("Error response:", error.response?.data);
       console.error("Error status:", error.response?.status);
       console.error("Full error:", JSON.stringify(error.response?.data, null, 2));
-      
+     
       // Handle 422 validation errors specifically
       if (error.response?.status === 422) {
         const validationErrors = error.response?.data;
         let errorMessage = "Validation error: ";
-        
+       
         if (validationErrors?.detail) {
           if (Array.isArray(validationErrors.detail)) {
-            errorMessage += validationErrors.detail.map((err: any) => 
+            errorMessage += validationErrors.detail.map((err: any) =>
               `${err.loc?.join('.')}: ${err.msg}`
             ).join(', ');
           } else {
@@ -332,19 +486,19 @@ const Groups = () => {
         } else {
           errorMessage = JSON.stringify(validationErrors);
         }
-        
+       
         toast({
           title: "Validation Error",
           description: errorMessage,
           variant: "destructive",
         });
       } else {
-        const errorMessage = error.response?.data?.detail || 
-                            error.response?.data?.message || 
+        const errorMessage = error.response?.data?.detail ||
+                            error.response?.data?.message ||
                             (Array.isArray(error.response?.data) ? error.response?.data.join(", ") : JSON.stringify(error.response?.data)) ||
-                            error.message || 
+                            error.message ||
                             "An error occurred while creating the group.";
-        
+       
         toast({
           title: "Failed to create group",
           description: errorMessage,
@@ -355,12 +509,108 @@ const Groups = () => {
       setIsCreatingGroup(false);
     }
   };
-
-  const handleSendMessage = () => {
-    if (!messageInput.trim()) return;
+ 
+  const handleSendMessage = async () => {
+    if (!messageInput.trim() || !selectedGroup?.id || !user?.id) return;
+ 
+    const temp: Message = {
+      id: `temp-${Date.now()}`,
+      chatId: selectedGroup.id,
+      senderId: user.id,
+      content: messageInput,
+      type: "text",
+      timestamp: new Date().toISOString(),
+      isRead: false,
+      isDelivered: false,
+    };
+    setMessages((prev) => [...prev, temp]);
     setMessageInput("");
+ 
+    try {
+      const sent = await chatService.sendGroupMessage({
+        user_id: user.id,
+        group_id: selectedGroup.id,
+        content: temp.content,
+      });
+      // Mark as seen to avoid WS duplication
+      seenMessageIdsRef.current.add(sent.id);
+      setMessages((prev) => {
+        const already = prev.some((m) => m.id === sent.id);
+        if (already) {
+          // WS message arrived first, drop the temp
+          return prev.filter((m) => m.id !== temp.id);
+        }
+        return prev.map((m) => (m.id === temp.id ? sent : m));
+      });
+    } catch (error: any) {
+      console.error("Error sending message:", error);
+      setMessages((prev) => prev.filter((m) => m.id !== temp.id));
+      toast({
+        title: "Failed to send",
+        description: error?.response?.data?.detail || error?.message || "Message not sent",
+        variant: "destructive",
+      });
+    }
   };
-
+ 
+  const openFilePicker = () => {
+    fileInputRef.current?.click();
+  };
+ 
+  const handleFileSelected: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedGroup?.id || !user?.id) return;
+ 
+    // Optimistic UI
+    const tempId = `temp-file-${Date.now()}`;
+    const optimistic: Message = {
+      id: tempId,
+      chatId: selectedGroup.id,
+      senderId: user.id,
+      content: messageInput || "",
+      type: file.type.startsWith("image/") ? "image" : "file",
+      fileUrl: undefined,
+      fileName: file.name,
+      timestamp: new Date().toISOString(),
+      isRead: false,
+      isDelivered: false,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+ 
+    try {
+      const uploaded = await filesService.upload(file);
+      const sent = await chatService.sendGroupMessage({
+        user_id: user.id,
+        group_id: selectedGroup.id,
+        content: messageInput || undefined,
+        file_url: uploaded.path, // backend expects stored path/name
+        file_name: uploaded.originalFilename,
+        file_type: file.type || undefined,
+      });
+      seenMessageIdsRef.current.add(sent.id);
+      setMessages((prev) => {
+        const already = prev.some((m) => m.id === sent.id);
+        if (already) {
+          return prev.filter((m) => m.id !== tempId);
+        }
+        return prev.map((m) => (m.id === tempId ? sent : m));
+      });
+    } catch (error: any) {
+      console.error("Error uploading/sending file:", error);
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      toast({
+        title: "File send failed",
+        description:
+          error?.response?.data?.detail || error?.message || "Could not send the file",
+        variant: "destructive",
+      });
+    } finally {
+      // reset input to allow same file re-selection
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setMessageInput("");
+    }
+  };
+ 
   // Show loading if user is not loaded yet
   if (!user) {
     return (
@@ -369,7 +619,7 @@ const Groups = () => {
       </div>
     );
   }
-
+ 
   return (
     <div className="flex h-full flex-col gap-4 md:flex-row md:gap-0 md:overflow-hidden">
       {/* Group List */}
@@ -386,7 +636,7 @@ const Groups = () => {
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-2">
                   <Plus className="h-4 w-4" />
-                  New group 
+                  New group
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-xl w-[calc(100vw-2rem)] max-h-[85vh] overflow-hidden flex flex-col">
@@ -397,16 +647,19 @@ const Groups = () => {
                   </DialogDescription>
                 </DialogHeader>
                 <div className="flex-1 overflow-y-auto space-y-6 pr-1 p-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="group-name">Group name</Label>
-                    <Input
-                      id="group-name"
-                      placeholder="Product Launch"
-                      value={groupName}
-                      onChange={(e) => setGroupName(e.target.value)}
-                    />
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="group-name">Group name</Label>
+                      <Input
+                        id="group-name"
+                        placeholder="Product Launch"
+                        value={groupName}
+                        onChange={(e) => setGroupName(e.target.value)}
+                      />
+                    </div>
                   </div>
-
+                  <Separator />
+ 
                   <div className="space-y-3">
                     <Label htmlFor="group-member-search">Add members</Label>
                     <div className="flex flex-wrap items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
@@ -483,7 +736,7 @@ const Groups = () => {
             onFilterChange={(next) => setFilter((next ? next : "all") as "all" | "unread" | "read")}
           />
         </div>
-
+ 
         <div className="flex-1 overflow-y-auto">
           {isLoadingGroups ? (
             <div className="flex items-center justify-center h-full">
@@ -512,7 +765,7 @@ const Groups = () => {
                   {group.name.slice(0, 2).toUpperCase()}
                 </AvatarFallback>
               </Avatar>
-
+ 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-1">
                   <h3 className="font-semibold text-sm truncate">{group.name}</h3>
@@ -538,7 +791,7 @@ const Groups = () => {
           )}
         </div>
       </div>
-
+ 
       {/* Group Chat */}
       {selectedGroup ? (
         <div className="flex-1 flex flex-col bg-background border border-border rounded-lg md:border-none md:rounded-none">
@@ -576,7 +829,7 @@ const Groups = () => {
               </Button>
             </div>
           </div>
-
+ 
           <div className="flex-1 overflow-y-auto p-4 space-y-2">
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-full">
@@ -592,7 +845,7 @@ const Groups = () => {
               ))
             )}
           </div>
-
+ 
           <div className="border-t border-border p-4 bg-card">
             <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
               <Button variant="ghost" size="icon" className="order-2 md:order-1">
@@ -625,5 +878,7 @@ const Groups = () => {
     </div>
   );
 };
-
+ 
 export default Groups;
+ 
+ 
