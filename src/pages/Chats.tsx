@@ -71,6 +71,8 @@ const Chats = () => {
 
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [isUpdatingMessage, setIsUpdatingMessage] = useState(false);
+  const pendingDeleteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const DELETE_GRACE_MS = 5000;
 
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
@@ -133,18 +135,28 @@ const Chats = () => {
     }
   };
 
-  const handleDeleteMessage = async (message: Message) => {
+  const handleDeleteMessage = (message: Message) => {
     if (!message?.id || message.senderId !== user?.id) return;
-    const previousMessages = messages;
-    setMessages((prev) => prev.filter((m) => m.id !== message.id));
+    if (pendingDeleteTimers.current[message.id]) return;
+
+    setMessages((prev) =>
+      prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: true } : m))
+    );
+
     if (editingMessageId === message.id) {
       handleCancelEditMessage();
     }
+
+    pendingDeleteTimers.current[message.id] = setTimeout(async () => {
+      delete pendingDeleteTimers.current[message.id];
     try {
       await chatService.deleteDirectMessage(message.id);
+        setMessages((prev) => prev.filter((m) => m.id !== message.id));
     } catch (error: any) {
       console.error("Error deleting message:", error);
-      setMessages(previousMessages);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: false } : m))
+        );
       toast({
         title: "Failed to delete",
         description:
@@ -152,7 +164,27 @@ const Chats = () => {
         variant: "destructive",
       });
     }
+    }, DELETE_GRACE_MS);
   };
+
+  const handleUndoDeleteMessage = (message: Message) => {
+    if (!message?.id) return;
+    const timer = pendingDeleteTimers.current[message.id];
+    if (timer) {
+      clearTimeout(timer);
+      delete pendingDeleteTimers.current[message.id];
+    }
+    setMessages((prev) =>
+      prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: false } : m))
+    );
+  };
+
+  useEffect(() => {
+    return () => {
+      Object.values(pendingDeleteTimers.current).forEach(clearTimeout);
+      pendingDeleteTimers.current = {};
+    };
+  }, []);
 
   const isNearBottom = () => {
     const container = messagesContainerRef.current;
@@ -1033,7 +1065,24 @@ const Chats = () => {
                 isSent={message.senderId === user?.id}
                 onEdit={handleStartEditMessage}
                 onDelete={handleDeleteMessage}
+                onUndoDelete={handleUndoDeleteMessage}
                 isEditing={editingMessageId === message.id}
+                editingValue={messageInput}
+                onEditingChange={setMessageInput}
+                onConfirmEdit={() => {
+                  const trimmed = messageInput.trim();
+                  if (!trimmed) {
+                    toast({
+                      title: "Message required",
+                      description: "Please update the message before saving.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  applyEditedMessage(trimmed);
+                }}
+                onCancelEdit={handleCancelEditMessage}
+                isUpdating={isUpdatingMessage}
               />
             ))}
             {isTyping && (
@@ -1063,19 +1112,8 @@ const Chats = () => {
                 <Paperclip className="h-5 w-5" />
               </Button>
               <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelected} />
+
               <div className="flex-1 order-1 md:order-2 flex flex-col gap-2">
-                {editingMessageId && (
-                  <div className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    <span>Editing message</span>
-                    <button
-                      type="button"
-                      onClick={handleCancelEditMessage}
-                      className="text-primary font-medium hover:underline"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                )}
                 {pendingAttachment && (
                   <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
                     <Paperclip className="h-4 w-4 text-muted-foreground" />
@@ -1090,6 +1128,7 @@ const Chats = () => {
                     </Button>
                   </div>
                 )}
+
                 <Textarea
                   ref={messageInputRef}
                   placeholder={
@@ -1109,8 +1148,8 @@ const Chats = () => {
                   }}
                   className="w-full min-h-[48px] resize-none"
                 />
-
               </div>
+
               <Button variant="ghost" size="icon" className="order-3 md:order-3">
                 <Smile className="h-5 w-5" />
               </Button>
@@ -1125,6 +1164,7 @@ const Chats = () => {
               </Button>
             </div>
           </div>
+
         </div>
       ) : (
         <div className="hidden md:flex flex-1 items-center justify-center bg-background border border-border md:border-none md:rounded-none rounded-lg">
@@ -1139,5 +1179,3 @@ const Chats = () => {
 };
  
 export default Chats;
- 
- 

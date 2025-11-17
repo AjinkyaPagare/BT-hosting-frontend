@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { useNavigate } from "react-router-dom";
-import { Search as SearchIcon, Paperclip, Send, Smile, Info, Plus, ArrowLeft } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+
+import { Search as SearchIcon, Paperclip, Send, Smile, Info, Plus, ArrowLeft, Loader2 } from "lucide-react";
+
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -36,12 +38,12 @@ type Friend = {
   email: string;
   isOnline: boolean;
 };
- 
+
 const Groups = () => {
   const [groups, setGroups] = useState<Group[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+
   const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
   const [messageInput, setMessageInput] = useState("");
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -54,25 +56,58 @@ const Groups = () => {
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [isLoadingGroups, setIsLoadingGroups] = useState(true);
   const navigate = useNavigate();
+  const { groupId: routeGroupId } = useParams<{ groupId?: string }>();
+  const selectedGroupId = routeGroupId ?? null;
   const { toast } = useToast();
   const { user } = useAuth();
+
   const friendSearchInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const messageInputRef = useRef<HTMLInputElement | null>(null);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
- 
+  const pendingDeleteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingMessageValue, setEditingMessageValue] = useState("");
+  const [isUpdatingMessage, setIsUpdatingMessage] = useState(false);
+  const DELETE_GRACE_MS = 5000;
+
+  const selectGroup = useCallback(
+    (groupId: string | null, options: { replace?: boolean } = {}) => {
+      if (groupId) {
+        navigate(`/app/groups/${encodeURIComponent(groupId)}`, { replace: options.replace });
+      } else {
+        navigate("/app/groups", { replace: options.replace });
+      }
+    },
+    [navigate]
+  );
+
+  const selectedGroup = useMemo(
+    () => groups.find((group) => group.id === selectedGroupId) ?? null,
+    [groups, selectedGroupId]
+  );
+
   useEffect(() => {
     const handleResize = () => setIsDesktop(window.innerWidth >= 768);
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
- 
+
   useEffect(() => {
-    if (isDesktop && !selectedGroup && groups[0]) {
-      setSelectedGroup(groups[0]);
+    if (isLoadingGroups) return;
+    if (selectedGroupId) {
+      const exists = groups.some((group) => group.id === selectedGroupId);
+      if (!exists) {
+        selectGroup(groups[0]?.id ?? null, { replace: true });
+      }
+      return;
     }
-  }, [isDesktop, selectedGroup, groups]);
- 
+    if (groups.length > 0) {
+      selectGroup(groups[0].id, { replace: true });
+    }
+  }, [groups, selectedGroupId, selectGroup, isLoadingGroups]);
+
   // Load messages for selected group
   useEffect(() => {
     const loadGroupMessages = async () => {
@@ -82,7 +117,7 @@ const Groups = () => {
         return;
       }
       try {
-        const history = await chatService.listGroupMessages(selectedGroup.id, 500, 0);
+        const history = await chatService.listGroupMessages(selectedGroup.id);
         const seen = new Set<string>();
         const unique = history.filter((m) => {
           if (seen.has(m.id)) return false;
@@ -103,11 +138,11 @@ const Groups = () => {
     };
     loadGroupMessages();
   }, [selectedGroup?.id, user?.id, toast]);
- 
+
   // Real-time: connect to group WebSocket when a group is selected
   useEffect(() => {
     if (!user?.id || !selectedGroup?.id) return;
- 
+
     const conn = wsService.connectGroup(selectedGroup.id, user.id, {
       onMessage: (data) => {
         if (!data || typeof data !== "object") return;
@@ -125,12 +160,12 @@ const Groups = () => {
         }
       },
     });
- 
+
     return () => {
       conn.close();
     };
   }, [user?.id, selectedGroup?.id]);
- 
+
   // Load groups list when component mounts
   useEffect(() => {
     const loadGroups = async () => {
@@ -138,13 +173,14 @@ const Groups = () => {
         setIsLoadingGroups(false);
         return;
       }
- 
+
       setIsLoadingGroups(true);
       try {
         console.log("Loading groups for user:", user.id);
-        const groupsList = await groupApi.getGroupsList(user.id);
+        const groupsList = await groupApi.getGroupsList();
+
         console.log("Received groups list:", groupsList);
-       
+
         if (!groupsList || groupsList.length === 0) {
           console.warn("No groups returned from API. This might mean:");
           console.warn("1. The user has no groups yet");
@@ -438,12 +474,12 @@ const Groups = () => {
         }
         return [newGroup, ...prev];
       });
-      setSelectedGroup(newGroup);
+      selectGroup(newGroup.id);
 
       // Try to refresh groups list from API in the background
       // This ensures we have the latest data, but doesn't block the UI
       try {
-        const groupsList = await groupApi.getGroupsList(user.id);
+        const groupsList = await groupApi.getGroupsList();
         if (groupsList && groupsList.length > 0) {
           // Update groups list, ensuring the new group is included and refreshed
           setGroups((prev) => {
@@ -456,7 +492,7 @@ const Groups = () => {
 
           // Select the newly created group if it exists in the refreshed list
           const createdGroup = groupsList.find((g) => g.id === newGroup.id) || newGroup;
-          setSelectedGroup(createdGroup);
+          selectGroup(createdGroup.id, { replace: true });
         }
       } catch (error) {
         // If refresh fails, that's okay - we already added the group locally
@@ -479,12 +515,12 @@ const Groups = () => {
       console.error("Error response:", error.response?.data);
       console.error("Error status:", error.response?.status);
       console.error("Full error:", JSON.stringify(error.response?.data, null, 2));
-     
+
       // Handle 422 validation errors specifically
       if (error.response?.status === 422) {
         const validationErrors = error.response?.data;
         let errorMessage = "Validation error: ";
-       
+
         if (validationErrors?.detail) {
           if (Array.isArray(validationErrors.detail)) {
             errorMessage += validationErrors.detail.map((err: any) =>
@@ -498,7 +534,7 @@ const Groups = () => {
         } else {
           errorMessage = JSON.stringify(validationErrors);
         }
-       
+
         toast({
           title: "Validation Error",
           description: errorMessage,
@@ -510,7 +546,7 @@ const Groups = () => {
                             (Array.isArray(error.response?.data) ? error.response?.data.join(", ") : JSON.stringify(error.response?.data)) ||
                             error.message ||
                             "An error occurred while creating the group.";
-       
+
         toast({
           title: "Failed to create group",
           description: errorMessage,
@@ -521,29 +557,126 @@ const Groups = () => {
       setIsCreatingGroup(false);
     }
   };
- 
+
+  const handleCancelEditMessage = () => {
+    setEditingMessageId(null);
+    setEditingMessageValue("");
+    setIsUpdatingMessage(false);
+  };
+
+  const handleStartEditMessage = (message: Message) => {
+    if (message.senderId !== user?.id || message.type !== "text") return;
+    setEditingMessageId(message.id);
+    setEditingMessageValue(message.content || "");
+  };
+
+  const applyEditedMessage = async () => {
+    if (!editingMessageId || !selectedGroup?.id) return;
+    const trimmed = editingMessageValue.trim();
+    if (!trimmed) {
+      toast({
+        title: "Message required",
+        description: "Please update the message before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setIsUpdatingMessage(true);
+    try {
+      const updated = await chatService.updateGroupMessage(editingMessageId, trimmed);
+      setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      handleCancelEditMessage();
+    } catch (error: any) {
+      console.error("Error updating group message:", error);
+      toast({
+        title: "Failed to update",
+        description:
+          error?.response?.data?.detail || error?.message || "Could not update the message",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdatingMessage(false);
+    }
+  };
+
+  const handleDeleteMessage = (message: Message) => {
+    if (!message?.id || message.senderId !== user?.id) return;
+    if (pendingDeleteTimers.current[message.id]) return;
+
+    setMessages((prev) =>
+      prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: true } : m))
+    );
+
+    if (editingMessageId === message.id) {
+      handleCancelEditMessage();
+    }
+
+    pendingDeleteTimers.current[message.id] = setTimeout(async () => {
+      delete pendingDeleteTimers.current[message.id];
+      try {
+        await chatService.deleteGroupMessage(message.id);
+        setMessages((prev) => prev.filter((m) => m.id !== message.id));
+      } catch (error: any) {
+        console.error("Error deleting group message:", error);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: false } : m))
+        );
+        toast({
+          title: "Failed to delete",
+          description:
+            error?.response?.data?.detail || error?.message || "Could not delete the message",
+          variant: "destructive",
+        });
+      }
+    }, DELETE_GRACE_MS);
+  };
+
+  const handleUndoDeleteMessage = (message: Message) => {
+    if (!message?.id) return;
+    const timer = pendingDeleteTimers.current[message.id];
+    if (timer) {
+      clearTimeout(timer);
+      delete pendingDeleteTimers.current[message.id];
+    }
+    setMessages((prev) =>
+      prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: false } : m))
+    );
+  };
+
+  useEffect(() => {
+    return () => {
+      Object.values(pendingDeleteTimers.current).forEach(clearTimeout);
+      pendingDeleteTimers.current = {};
+    };
+  }, []);
+
   const handleSendMessage = async () => {
-    if (!messageInput.trim() || !selectedGroup?.id || !user?.id) return;
- 
+    if (!selectedGroup?.id || !user?.id || isUpdatingMessage) return;
+    const trimmed = messageInput.trim();
+
+    if (!trimmed) return;
+
     const temp: Message = {
       id: `temp-${Date.now()}`,
       chatId: selectedGroup.id,
       senderId: user.id,
-      content: messageInput,
+      content: trimmed,
       type: "text",
       timestamp: new Date().toISOString(),
       isRead: false,
       isDelivered: false,
     };
+
     setMessages((prev) => [...prev, temp]);
     setMessageInput("");
- 
+
     try {
       const sent = await chatService.sendGroupMessage({
         user_id: user.id,
         group_id: selectedGroup.id,
         content: temp.content,
       });
+
       // Mark as seen to avoid WS duplication
       seenMessageIdsRef.current.add(sent.id);
       setMessages((prev) => {
@@ -564,15 +697,34 @@ const Groups = () => {
       });
     }
   };
- 
+
   const openFilePicker = () => {
+    if (editingMessageId) {
+      toast({
+        title: "Finish editing",
+        description: "Complete or cancel your edit before attaching files.",
+      });
+      return;
+    }
     fileInputRef.current?.click();
   };
- 
+
   const handleFileSelected: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedGroup?.id || !user?.id) return;
- 
+    if (!file) {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    if (editingMessageId) {
+      toast({
+        title: "Finish editing",
+        description: "Complete or cancel your edit before sending files.",
+      });
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    if (!selectedGroup?.id || !user?.id) return;
+
     // Optimistic UI
     const tempId = `temp-file-${Date.now()}`;
     const optimistic: Message = {
@@ -588,7 +740,7 @@ const Groups = () => {
       isDelivered: false,
     };
     setMessages((prev) => [...prev, optimistic]);
- 
+
     try {
       const uploaded = await filesService.upload(file);
       const sent = await chatService.sendGroupMessage({
@@ -622,7 +774,16 @@ const Groups = () => {
       setMessageInput("");
     }
   };
- 
+
+  useEffect(() => {
+    setEditingMessageId(null);
+    setIsUpdatingMessage(false);
+    setMessageInput("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, [selectedGroup?.id]);
+
   // Show loading if user is not loaded yet
   if (!user) {
     return (
@@ -631,7 +792,7 @@ const Groups = () => {
       </div>
     );
   }
- 
+
   return (
     <div className="flex h-full flex-col gap-4 md:flex-row md:gap-0 md:overflow-hidden">
       {/* Group List */}
@@ -671,7 +832,7 @@ const Groups = () => {
                     </div>
                   </div>
                   <Separator />
- 
+
                   <div className="space-y-3">
                     <Label htmlFor="group-member-search">Add members</Label>
                     <div className="flex flex-wrap items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
@@ -748,7 +909,7 @@ const Groups = () => {
             onFilterChange={(next) => setFilter((next ? next : "all") as "all" | "unread" | "read")}
           />
         </div>
- 
+
         <div className="flex-1 overflow-y-auto">
           {isLoadingGroups ? (
             <div className="flex items-center justify-center h-full">
@@ -763,47 +924,47 @@ const Groups = () => {
             </div>
           ) : (
             filteredGroups.map((group) => (
-            <div
-              key={group.id}
-              onClick={() => setSelectedGroup(group)}
-              className={cn(
-                "flex items-center gap-3 p-3 cursor-pointer hover:bg-accent transition-colors border-b border-border",
-                selectedGroup?.id === group.id && "bg-accent"
-              )}
-            >
-              <Avatar className="h-12 w-12">
-                <AvatarImage src={group.avatar} alt={group.name} />
-                <AvatarFallback className="bg-primary text-primary-foreground">
-                  {group.name.slice(0, 2).toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
- 
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between mb-1">
-                  <h3 className="font-semibold text-sm truncate">{group.name}</h3>
-                  {group.lastMessage && (
-                    <span className="text-xs text-muted-foreground shrink-0 ml-2">
-                      {format(new Date(group.lastMessage.timestamp), "HH:mm")}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground truncate">
-                    {group.lastMessage?.content || `${group.members.length} members`}
-                  </p>
-                  {group.unreadCount > 0 && (
-                    <Badge className="ml-2 shrink-0 bg-primary text-primary-foreground">
-                      {group.unreadCount}
-                    </Badge>
-                  )}
+              <div
+                key={group.id}
+                onClick={() => selectGroup(group.id)}
+                className={cn(
+                  "flex items-center gap-3 p-3 cursor-pointer hover:bg-accent transition-colors border-b border-border",
+                  selectedGroup?.id === group.id && "bg-accent"
+                )}
+              >
+                <Avatar className="h-12 w-12">
+                  <AvatarImage src={group.avatar} alt={group.name} />
+                  <AvatarFallback className="bg-primary text-primary-foreground">
+                    {group.name.slice(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="font-semibold text-sm truncate">{group.name}</h3>
+                    {group.lastMessage && (
+                      <span className="text-xs text-muted-foreground shrink-0 ml-2">
+                        {format(new Date(group.lastMessage.timestamp), "HH:mm")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-muted-foreground truncate">
+                      {group.lastMessage?.content || `${group.members.length} members`}
+                    </p>
+                    {group.unreadCount > 0 && (
+                      <Badge className="ml-2 shrink-0 bg-primary text-primary-foreground">
+                        {group.unreadCount}
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
             ))
           )}
         </div>
       </div>
- 
+
       {/* Group Chat */}
       {selectedGroup ? (
         <div className="flex-1 flex flex-col bg-background border border-border rounded-lg md:border-none md:rounded-none">
@@ -813,7 +974,8 @@ const Groups = () => {
                 variant="ghost"
                 size="icon"
                 className="md:hidden"
-                onClick={() => setSelectedGroup(null)}
+                onClick={() => selectGroup(null)}
+
                 aria-label="Back to group list"
               >
                 <ArrowLeft className="h-5 w-5" />
@@ -841,7 +1003,7 @@ const Groups = () => {
               </Button>
             </div>
           </div>
- 
+
           <div className="flex-1 overflow-y-auto p-4 space-y-2">
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-full">
@@ -853,28 +1015,60 @@ const Groups = () => {
                   key={message.id}
                   message={message}
                   isSent={message.senderId === user?.id}
+                  onEdit={handleStartEditMessage}
+                  onDelete={handleDeleteMessage}
+                  onUndoDelete={handleUndoDeleteMessage}
+                  isEditing={editingMessageId === message.id}
+                  editingValue={editingMessageValue}
+                  onEditingChange={setEditingMessageValue}
+                  onConfirmEdit={applyEditedMessage}
+                  onCancelEdit={handleCancelEditMessage}
+                  isUpdating={isUpdatingMessage}
                 />
               ))
             )}
           </div>
- 
           <div className="border-t border-border p-4 bg-card">
             <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
-              <Button variant="ghost" size="icon" className="order-2 md:order-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="order-2 md:order-1"
+                onClick={openFilePicker}
+                aria-label="Attach a file"
+              >
                 <Paperclip className="h-5 w-5" />
               </Button>
-              <Input
-                placeholder="Type a message..."
-                value={messageInput}
-                onChange={(e) => setMessageInput(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                className="flex-1 order-1 md:order-2"
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleFileSelected}
               />
+              <div className="flex-1 order-1 md:order-2 flex flex-col gap-2">
+                <Input
+                  ref={messageInputRef}
+                  placeholder="Type a message..."
+                  value={messageInput}
+                  onChange={(e) => setMessageInput(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                />
+              </div>
               <Button variant="ghost" size="icon" className="order-3 md:order-3">
                 <Smile className="h-5 w-5" />
               </Button>
-              <Button onClick={handleSendMessage} size="icon" className="order-4 md:order-4">
-                <Send className="h-5 w-5" />
+              <Button
+                onClick={handleSendMessage}
+                size="icon"
+                className="order-4 md:order-4"
+                disabled={isUpdatingMessage}
+              >
+                {isUpdatingMessage ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
               </Button>
             </div>
           </div>

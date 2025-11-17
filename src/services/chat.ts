@@ -101,7 +101,7 @@ export const chatService = {
 
   /** Send group chat */
   sendGroupMessage: async (payload: SendGroupMessageRequest): Promise<Message> => {
-    const { data } = await api.post<BackendMessage>(`/chat/group`, payload);
+    const { data } = await api.post<BackendMessage>(`/chat/groups/messages`, payload);
     return mapBackendToUi(data);
   },
 
