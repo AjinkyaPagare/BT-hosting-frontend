@@ -38,8 +38,10 @@ const App = () => (
               <Route path="/app" element={<AppLayout />}>
                 <Route index element={<Navigate to="chats" replace />} />
                 <Route path="chats" element={<Chats />} />
+                <Route path="chats/:chatId" element={<Chats />} />
                 <Route path="chats/:chatId/info" element={<ChatInfo />} />
                 <Route path="groups" element={<Groups />} />
+                <Route path="groups/:groupId" element={<Groups />} />
                 <Route path="groups/:groupId/info" element={<GroupInfo />} />
                 <Route path="groups/:groupId/media" element={<GroupMedia />} />
                 <Route path="calendar" element={<Calendar />} />
@@ -58,3 +60,4 @@ const App = () => (
 );
 
 export default App;
+  

@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+
 import { Paperclip, Send, Smile, Info, Phone, Video, Plus, ArrowLeft, Loader2, Ban, X } from "lucide-react";
 
 import {
@@ -15,6 +16,8 @@ import {
 } from "@/components/ui/dialog";
 import { Search as SearchComponent } from "@/components/ui/Search";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Label } from "@/components/ui/label";
@@ -46,7 +49,6 @@ const LOAD_MORE_STEP = 25;
 const Chats = () => {
   const queryClient = useQueryClient();
 
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
   const [messageInput, setMessageInput] = useState("");
@@ -56,12 +58,21 @@ const Chats = () => {
   const [friendResults, setFriendResults] = useState<Friend[]>([]);
   const [isDesktop, setIsDesktop] = useState(false);
   const navigate = useNavigate();
+  const { chatId: routeChatId } = useParams<{ chatId?: string }>();
+  const selectedChatId = routeChatId ?? null;
   const { toast } = useToast();
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [visibleCount, setVisibleCount] = useState(DEFAULT_VISIBLE_MESSAGES);
+
   const [pendingAttachment, setPendingAttachment] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [isUpdatingMessage, setIsUpdatingMessage] = useState(false);
+  const pendingDeleteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const DELETE_GRACE_MS = 5000;
 
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
@@ -70,12 +81,110 @@ const Chats = () => {
   const initialScrollDoneRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
 
+  const selectChat = useCallback(
+    (chatId: string | null, options: { replace?: boolean } = {}) => {
+      if (chatId) {
+        navigate(`/app/chats/${encodeURIComponent(chatId)}`, { replace: options.replace });
+      } else {
+        navigate("/app/chats", { replace: options.replace });
+      }
+    },
+    [navigate]
+  );
+
   const resetAttachment = () => {
     setPendingAttachment(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
+
+  const handleCancelEditMessage = () => {
+    setEditingMessageId(null);
+    setMessageInput("");
+    setIsUpdatingMessage(false);
+  };
+
+  const handleStartEditMessage = (message: Message) => {
+    if (message.senderId !== user?.id || message.type !== "text") return;
+    setEditingMessageId(message.id);
+    setMessageInput(message.content || "");
+    resetAttachment();
+    setTimeout(() => {
+      messageInputRef.current?.focus();
+    }, 0);
+  };
+
+  const applyEditedMessage = async (content: string) => {
+    if (!editingMessageId || !selectedChat?.user.id) return;
+    setIsUpdatingMessage(true);
+    try {
+      const updated = await chatService.updateDirectMessage(editingMessageId, content);
+      setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      handleCancelEditMessage();
+    } catch (error: any) {
+      console.error("Error updating message:", error);
+      toast({
+        title: "Failed to update",
+        description:
+          error?.response?.data?.detail || error?.message || "Could not update the message",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdatingMessage(false);
+    }
+  };
+
+  const handleDeleteMessage = (message: Message) => {
+    if (!message?.id || message.senderId !== user?.id) return;
+    if (pendingDeleteTimers.current[message.id]) return;
+
+    setMessages((prev) =>
+      prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: true } : m))
+    );
+
+    if (editingMessageId === message.id) {
+      handleCancelEditMessage();
+    }
+
+    pendingDeleteTimers.current[message.id] = setTimeout(async () => {
+      delete pendingDeleteTimers.current[message.id];
+    try {
+      await chatService.deleteDirectMessage(message.id);
+        setMessages((prev) => prev.filter((m) => m.id !== message.id));
+    } catch (error: any) {
+      console.error("Error deleting message:", error);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: false } : m))
+        );
+      toast({
+        title: "Failed to delete",
+        description:
+          error?.response?.data?.detail || error?.message || "Could not delete the message",
+        variant: "destructive",
+      });
+    }
+    }, DELETE_GRACE_MS);
+  };
+
+  const handleUndoDeleteMessage = (message: Message) => {
+    if (!message?.id) return;
+    const timer = pendingDeleteTimers.current[message.id];
+    if (timer) {
+      clearTimeout(timer);
+      delete pendingDeleteTimers.current[message.id];
+    }
+    setMessages((prev) =>
+      prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: false } : m))
+    );
+  };
+
+  useEffect(() => {
+    return () => {
+      Object.values(pendingDeleteTimers.current).forEach(clearTimeout);
+      pendingDeleteTimers.current = {};
+    };
+  }, []);
 
   const isNearBottom = () => {
     const container = messagesContainerRef.current;
@@ -202,19 +311,36 @@ const Chats = () => {
   }, []);
 
   useEffect(() => {
-    if (isDesktop && !selectedChatId && chats[0]) {
-      setSelectedChatId(chats[0].id);
+    if (isFriendsLoading || isFriendsFetching) return;
+    if (isDesktop && !selectedChatId && chats.length > 0) {
+      selectChat(chats[0].id, { replace: true });
     }
-  }, [isDesktop, selectedChatId, chats]);
+  }, [isDesktop, selectedChatId, chats, selectChat, isFriendsLoading, isFriendsFetching]);
 
   useEffect(() => {
-    if (selectedChatId && !chats.some((chat) => chat.id === selectedChatId)) {
-      setSelectedChatId(chats[0]?.id ?? null);
+    if (isFriendsLoading || isFriendsFetching) return;
+
+    if (selectedChatId) {
+      const exists = chats.some((chat) => chat.id === selectedChatId);
+      if (!exists && chats.length > 0) {
+        selectChat(chats[0]?.id ?? null, { replace: true });
+      }
+      return;
     }
-    if (!selectedChatId && chats[0]) {
-      setSelectedChatId(chats[0].id);
+    if (!selectedChatId && chats.length > 0) {
+      selectChat(chats[0].id, { replace: true });
     }
-  }, [chats, selectedChatId]);
+  }, [chats, selectedChatId, selectChat, isFriendsLoading, isFriendsFetching]);
+
+  useEffect(() => {
+    setEditingMessageId(null);
+    setIsUpdatingMessage(false);
+    setMessageInput("");
+    setPendingAttachment(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, [selectedChatId]);
 
   // Load direct messages when chat changes
   useEffect(() => {
@@ -226,7 +352,8 @@ const Chats = () => {
         return;
       }
       try {
-        const history = await chatService.listDirectMessages(selectedChat.user.id, 200, 0);
+        const history = await chatService.listDirectMessages(selectedChat.user.id);
+
         const seen = new Set<string>();
         const unique = history.filter((m) => {
           if (seen.has(m.id)) return false;
@@ -467,7 +594,7 @@ const Chats = () => {
         description: `${data.receiverName ?? data.receiverEmail ?? "User"} has been blocked.`,
       });
       invalidateFriendQueries();
-      setSelectedChatId(null);
+      selectChat(null);
     },
     onError: (error: any) => {
       toast({
@@ -483,7 +610,7 @@ const Chats = () => {
 
     const existingChat = chats.find((chat) => chat.userId === friendId);
     if (existingChat) {
-      setSelectedChatId(existingChat.id);
+      selectChat(existingChat.id);
       toast({
         title: "Already connected",
         description: `Opening conversation with ${existingChat.user.name}.`,
@@ -507,8 +634,21 @@ const Chats = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!selectedChat?.user.id || !user?.id) return;
+    if (!selectedChat?.user.id || !user?.id || isUpdatingMessage) return;
     const trimmedMessage = messageInput.trim();
+
+    if (editingMessageId) {
+      if (!trimmedMessage) {
+        toast({
+          title: "Message required",
+          description: "Please update the message before saving.",
+          variant: "destructive",
+        });
+        return;
+      }
+      await applyEditedMessage(trimmedMessage);
+      return;
+    }
 
     if (!trimmedMessage && !pendingAttachment) return;
 
@@ -606,7 +746,16 @@ const Chats = () => {
     }
   };
 
-  const openFilePicker = () => fileInputRef.current?.click();
+  const openFilePicker = () => {
+    if (editingMessageId) {
+      toast({
+        title: "Finish editing",
+        description: "Complete or cancel your edit before attaching files.",
+      });
+      return;
+    }
+    fileInputRef.current?.click();
+  };
 
   const handleFileSelected: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const file = e.target.files?.[0];
@@ -842,7 +991,7 @@ const Chats = () => {
             <ChatListItem
               key={chat.id}
               chat={chat}
-              onClick={() => setSelectedChatId(chat.id)}
+              onClick={() => selectChat(chat.id)}
               isActive={selectedChat?.id === chat.id}
             />
           ))}
@@ -859,7 +1008,7 @@ const Chats = () => {
                 variant="ghost"
                 size="icon"
                 className="md:hidden"
-                onClick={() => setSelectedChatId(null)}
+                onClick={() => selectChat(null)}
                 aria-label="Back to chat list"
               >
                 <ArrowLeft className="h-5 w-5" />
@@ -914,6 +1063,26 @@ const Chats = () => {
                 key={message.id}
                 message={message}
                 isSent={message.senderId === user?.id}
+                onEdit={handleStartEditMessage}
+                onDelete={handleDeleteMessage}
+                onUndoDelete={handleUndoDeleteMessage}
+                isEditing={editingMessageId === message.id}
+                editingValue={messageInput}
+                onEditingChange={setMessageInput}
+                onConfirmEdit={() => {
+                  const trimmed = messageInput.trim();
+                  if (!trimmed) {
+                    toast({
+                      title: "Message required",
+                      description: "Please update the message before saving.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  applyEditedMessage(trimmed);
+                }}
+                onCancelEdit={handleCancelEditMessage}
+                isUpdating={isUpdatingMessage}
               />
             ))}
             {isTyping && (
@@ -932,10 +1101,18 @@ const Chats = () => {
           {/* Message Input */}
           <div className="border-t border-border p-4 bg-card">
             <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
-              <Button variant="ghost" size="icon" className="order-2 md:order-1" onClick={openFilePicker}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="order-2 md:order-1"
+                onClick={openFilePicker}
+                disabled={Boolean(editingMessageId)}
+                aria-label="Attach a file"
+              >
                 <Paperclip className="h-5 w-5" />
               </Button>
               <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelected} />
+
               <div className="flex-1 order-1 md:order-2 flex flex-col gap-2">
                 {pendingAttachment && (
                   <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
@@ -951,23 +1128,43 @@ const Chats = () => {
                     </Button>
                   </div>
                 )}
-                <Input
-                  placeholder={pendingAttachment ? "Add a caption..." : "Type a message..."}
+
+                <Textarea
+                  ref={messageInputRef}
+                  placeholder={
+                    editingMessageId
+                      ? "Update your message..."
+                      : pendingAttachment
+                      ? "Add a caption..."
+                      : "Type a message..."
+                  }
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
-                  onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                  className="w-full"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                  className="w-full min-h-[48px] resize-none"
                 />
               </div>
+
               <Button variant="ghost" size="icon" className="order-3 md:order-3">
                 <Smile className="h-5 w-5" />
               </Button>
 
-              <Button onClick={handleSendMessage} size="icon" className="order-4 md:order-4">
-                <Send className="h-5 w-5" />
+              <Button
+                onClick={handleSendMessage}
+                size="icon"
+                className="order-4 md:order-4"
+                disabled={isUpdatingMessage}
+              >
+                {isUpdatingMessage ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
               </Button>
             </div>
           </div>
+
         </div>
       ) : (
         <div className="hidden md:flex flex-1 items-center justify-center bg-background border border-border md:border-none md:rounded-none rounded-lg">
@@ -982,5 +1179,3 @@ const Chats = () => {
 };
  
 export default Chats;
- 
- 

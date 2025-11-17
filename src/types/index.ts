@@ -20,6 +20,7 @@ export interface Message {
   timestamp: string;
   isRead: boolean;
   isDelivered: boolean;
+  isPendingDelete?: boolean;
 }
 
 export interface Chat {

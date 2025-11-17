@@ -1,6 +1,8 @@
 import api from "./api";
 import type { Group, GroupMember } from "@/types";
 
+/* ---------------------- Request & Response Types ---------------------- */
+
 export interface CreateGroupRequest {
   name: string;
   owner_id: string;
@@ -11,52 +13,13 @@ export interface CreateGroupRequest {
 export interface AddMembersRequest {
   user_id: string;
   group_id: string;
-  "user_ids to add": string[];
-}
-
-export interface AddMembersResponse {
-  message?: string;
-  added_members?: string[];
+  user_ids: string[]; // simplified key
 }
 
 export interface RemoveMemberRequest {
   user_id: string;
   group_id: string;
-  "user_id to remove": string;
-}
-
-export interface RemoveMemberResponse {
-  message?: string;
-  removed_user_id?: string;
-}
-
-export interface LeaveGroupRequest {
-  user_id: string;
-  group_id: string;
-}
-
-export interface LeaveGroupResponse {
-  message?: string;
-}
-
-export interface DeleteGroupRequest {
-  group_id: string;
-  requested_by: string;
-  reason: string;
-}
-
-export interface DeleteGroupResponse {
-  status?: string;
-  action?: string;
-  target?: {
-    type?: string;
-    id?: string;
-  };
-  detail?: {
-    success?: boolean;
-    message?: string;
-    group_id?: string;
-  };
+  target_user_id: string; // simplified key
 }
 
 export interface UpdateMemberRoleRequest {
@@ -66,11 +29,18 @@ export interface UpdateMemberRoleRequest {
   role: string;
 }
 
-export interface UpdateMemberRoleResponse {
-  message?: string;
-  user_id?: string;
-  role?: string;
+export interface LeaveGroupRequest {
+  user_id: string;
+  group_id: string;
 }
+
+export interface DeleteGroupRequest {
+  group_id: string;
+  requested_by: string;
+  reason: string;
+}
+
+/* ---------------------- Raw Backend Response Types ---------------------- */
 
 interface RawGroupMember {
   id?: string | null;
@@ -106,32 +76,38 @@ interface RawGroupsListEnvelope {
   data?: RawGroupResponse[];
 }
 
-const normalizeMember = (member: RawGroupMember): GroupMember => {
-  const resolvedUserId = member.user_id ?? member.id ?? "";
-  const role = member.role ?? "member";
+/* ---------------------- Member Normalizer ---------------------- */
+
+const normalizeMember = (m: RawGroupMember): GroupMember => {
+  const uid = m.user_id ?? m.id ?? "";
 
   return {
-    id: resolvedUserId,
-    userId: resolvedUserId,
-    name: member.name ?? "Unknown user",
-    email: member.email ?? undefined,
-    avatar: member.avatar ?? undefined,
-    role,
-    joinedAt: member.joined_at ?? new Date().toISOString(),
-    isOnline: Boolean(member.isOnline ?? member.is_online),
-    status: member.status ?? null,
+    id: uid,
+    userId: uid,
+    name: m.name ?? "Unknown User",
+    email: m.email ?? undefined,
+    avatar: m.avatar ?? undefined,
+    role: m.role ?? "member",
+    joinedAt: m.joined_at ?? new Date().toISOString(),
+    isOnline: Boolean(m.isOnline ?? m.is_online),
+    status: m.status ?? null,
   };
 };
 
-const normalizeGroup = (group: RawGroupResponse): Group => {
-  const safeOwnerId = group.owner_id ?? "";
-  const normalizedMembers = (group.members ?? []).map(normalizeMember);
-  const membersById = new Map(normalizedMembers.map((member) => [member.userId, member]));
+/* ---------------------- Group Normalizer ---------------------- */
 
-  if (!membersById.has(safeOwnerId) && safeOwnerId) {
-    membersById.set(safeOwnerId, {
-      id: safeOwnerId,
-      userId: safeOwnerId,
+const normalizeGroup = (g: RawGroupResponse): Group => {
+  const groupId = g.id ?? g.group_id ?? "";
+  const ownerId = g.owner_id ?? "";
+
+  const rawMembers = Array.isArray(g.members) ? g.members : [];
+  const normalizedMembers = rawMembers.map(normalizeMember);
+
+  // ensure owner exists
+  if (ownerId && !normalizedMembers.find((m) => m.userId === ownerId)) {
+    normalizedMembers.push({
+      id: ownerId,
+      userId: ownerId,
       name: "Group Owner",
       role: "owner",
       joinedAt: new Date().toISOString(),
@@ -139,195 +115,132 @@ const normalizeGroup = (group: RawGroupResponse): Group => {
     });
   }
 
-  const members = Array.from(membersById.values()).map((member) => {
-    if (member.userId === safeOwnerId) {
-      return { ...member, role: "owner" };
-    }
-    return { ...member, role: member.role ?? "member" };
-  });
+  // fix member roles
+  const finalMembers = normalizedMembers.map((m) =>
+    m.userId === ownerId ? { ...m, role: "owner" } : m
+  );
 
-  const memberIds = Array.from(new Set(group.member_ids ?? members.map((member) => member.userId)));
-  if (safeOwnerId && !memberIds.includes(safeOwnerId)) {
-    memberIds.unshift(safeOwnerId);
-  }
+  // final memberIds
+  const memberIds =
+    g.member_ids ??
+    finalMembers.map((m) => m.userId);
 
-  const derivedAdminIds = members
-    .filter((member) => member.role === "owner" || member.role === "admin")
-    .map((member) => member.userId);
-  const adminIdsSet = new Set<string>([...derivedAdminIds, ...(group.admin_ids ?? [])]);
-  if (safeOwnerId) {
-    adminIdsSet.add(safeOwnerId);
-  }
+  // admin set
+  const derivedAdmins = finalMembers
+    .filter((m) => m.role === "owner" || m.role === "admin")
+    .map((m) => m.userId);
+
+  const adminIds = Array.from(
+    new Set([...(g.admin_ids ?? []), ...derivedAdmins, ownerId])
+  );
 
   return {
-    id: group.id ?? group.group_id ?? "",
-    name: group.name ?? "Unnamed Group",
-    avatar: group.avatar ?? undefined,
-    ownerId: safeOwnerId,
-    isOpen: Boolean(group.is_open),
-    adminIds: Array.from(adminIdsSet),
+    id: groupId,
+    name: g.name ?? "Unnamed Group",
+    avatar: g.avatar ?? undefined,
+    ownerId,
+    isOpen: Boolean(g.is_open),
+    adminIds,
     memberIds,
-    members,
+    members: finalMembers,
     lastMessage: undefined,
-    unreadCount: group.unread_count ?? 0,
-    createdAt: group.created_at ?? new Date().toISOString(),
-    updatedAt: group.updated_at ?? group.created_at ?? new Date().toISOString(),
+    unreadCount: g.unread_count ?? 0,
+    createdAt: g.created_at ?? new Date().toISOString(),
+    updatedAt: g.updated_at ?? g.created_at ?? new Date().toISOString(),
   };
 };
 
-const ensureGroup = (raw: RawGroupResponse): Group => normalizeGroup(raw);
-
-const coerceGroupsArray = (payload: unknown): RawGroupResponse[] => {
-  if (Array.isArray(payload)) {
-    return payload as RawGroupResponse[];
-  }
+const ensureArray = (payload: unknown): RawGroupResponse[] => {
+  if (Array.isArray(payload)) return payload;
   if (payload && typeof payload === "object") {
-    const envelope = payload as RawGroupsListEnvelope;
-    if (Array.isArray(envelope.groups)) {
-      return envelope.groups;
-    }
-    if (Array.isArray(envelope.data)) {
-      return envelope.data;
-    }
+    const env = payload as RawGroupsListEnvelope;
+    return env.groups ?? env.data ?? [];
   }
   return [];
 };
 
+/* ---------------------- Public groupApi ---------------------- */
+
 export const groupApi = {
-  /**
-   * Fetch groups for the authenticated user.
-   */
-  getGroupsList: async (_userId: string): Promise<Group[]> => {
+  /** Fetch groups for logged-in user */
+  getGroupsList: async (): Promise<Group[]> => {
     try {
-      console.log("Fetching groups from /groups/my-groups");
-      const response = await api.get<RawGroupsListEnvelope | RawGroupResponse[]>("/groups/my-groups");
-      const rawGroups = coerceGroupsArray(response.data);
-      console.log(`Received ${rawGroups.length} groups`);
-      return rawGroups.map(ensureGroup);
-    } catch (error: any) {
-      console.error("Error fetching groups list:", error);
-      console.error("Error response:", error.response?.data);
-      console.error("Error status:", error.response?.status);
-      throw error;
+      const res = await api.get("/groups/my-groups");
+      const rawGroups = ensureArray(res.data);
+      return rawGroups.map(normalizeGroup);
+    } catch (err: any) {
+      console.error("❌ Error loading groups:", err.response?.data);
+      throw err;
     }
   },
 
-  /**
-   * Create a new group and return the normalized representation.
-   */
+  /** Create a new group */
   createGroup: async (data: CreateGroupRequest): Promise<Group> => {
-    const userIds = Array.isArray(data.user_ids) && data.user_ids.length > 0 ? data.user_ids : [data.owner_id];
-    const uniqueUserIds = Array.from(new Set([data.owner_id, ...userIds]));
+    const users = [...new Set([data.owner_id, ...data.user_ids])];
 
     const payload = {
       name: data.name.trim(),
       owner_id: data.owner_id,
-      user_ids: uniqueUserIds,
-      is_open: data.is_open ?? false,
+      user_ids: users,
+      is_open: Boolean(data.is_open),
     };
 
-    console.log("Sending create group request:", payload);
-
     try {
-      const response = await api.post<RawGroupResponse>("/groups/create", payload);
-      console.log("Create group response:", response.data);
-      return ensureGroup(response.data);
-    } catch (error: any) {
-      console.error("Create group API error:", error);
-      console.error("Request payload was:", payload);
-      console.error("Error details:", error.response?.data);
-      throw error;
+      const res = await api.post("/groups/create", payload);
+      return normalizeGroup(res.data);
+    } catch (err: any) {
+      console.error("❌ Create group error:", err.response?.data);
+      throw err;
     }
   },
 
-  /**
-   * Retrieve group details for a specific group.
-   */
+  /** Get details of a single group */
   getGroupDetails: async (userId: string, groupId: string): Promise<Group> => {
-    console.log(`Fetching group details: /groups/groupdetail/${userId}/${groupId}`);
     try {
-      const response = await api.get<RawGroupResponse>(`/groups/groupdetail/${userId}/${groupId}`);
-      console.log("Group details response:", response.data);
-      return ensureGroup(response.data);
-    } catch (error: any) {
-      console.error("Error fetching group details:", error);
-      console.error("Request URL:", `/groups/groupdetail/${userId}/${groupId}`);
-      console.error("Error details:", error.response?.data);
-      throw error;
+      const res = await api.get(`/groups/groupdetail/${userId}/${groupId}`);
+      return normalizeGroup(res.data);
+    } catch (err: any) {
+      console.error("❌ Group details error:", err.response?.data);
+      throw err;
     }
   },
 
-  /**
-   * Add members to a group.
-   */
-  addMembers: async (data: AddMembersRequest): Promise<AddMembersResponse> => {
+  /** Add members */
+  addMembers: async (data: AddMembersRequest) => {
     const payload = {
       user_id: data.user_id,
       group_id: data.group_id,
-      "user_ids to add": data["user_ids to add"],
+      "user_ids to add": data.user_ids, // backend expects exact key
     };
 
-    console.log("Adding members to group:", payload);
     try {
-      const response = await api.post<AddMembersResponse>("/groups/members/add", payload);
-      console.log("Add members response:", response.data);
-      return response.data;
-    } catch (error: any) {
-      console.error("Error adding members:", error);
-      console.error("Request payload:", payload);
-      console.error("Error details:", error.response?.data);
-      throw error;
+      const res = await api.post("/groups/members/add", payload);
+      return res.data;
+    } catch (err: any) {
+      console.error("❌ Add members error:", err.response?.data);
+      throw err;
     }
   },
 
-  /**
-   * Remove a member from a group.
-   */
-  removeMember: async (data: RemoveMemberRequest): Promise<RemoveMemberResponse> => {
+  /** Remove member */
+  removeMember: async (data: RemoveMemberRequest) => {
     const payload = {
       user_id: data.user_id,
       group_id: data.group_id,
-      "user_id to remove": data["user_id to remove"],
+      "user_id to remove": data.target_user_id,
     };
 
-    console.log("Removing member from group:", payload);
     try {
-      const response = await api.post<RemoveMemberResponse>("/groups/members/remove", payload);
-      console.log("Remove member response:", response.data);
-      return response.data;
-    } catch (error: any) {
-      console.error("Error removing member:", error);
-      console.error("Request payload:", payload);
-      console.error("Error details:", error.response?.data);
-      throw error;
+      const res = await api.post("/groups/members/remove", payload);
+      return res.data;
+    } catch (err: any) {
+      console.error("❌ Remove member error:", err.response?.data);
+      throw err;
     }
   },
 
-  /**
-   * Update a member's role within a group.
-   */
-  updateMemberRole: async (data: UpdateMemberRoleRequest): Promise<UpdateMemberRoleResponse> => {
-    const payload = {
-      user_id: data.user_id,
-      group_id: data.group_id,
-      target_user_id: data.target_user_id,
-      role: data.role,
-    };
-
-    console.log("Updating member role:", payload);
-    try {
-      const response = await api.put<UpdateMemberRoleResponse>("/groups/members/role", payload);
-      console.log("Update member role response:", response.data);
-      return response.data;
-    } catch (error: any) {
-      console.error("Error updating member role:", error);
-      console.error("Request payload:", payload);
-      console.error("Error details:", error.response?.data);
-      throw error;
-    }
-  },
-
-  leaveGroup: async (data: LeaveGroupRequest): Promise<LeaveGroupResponse> => {
+  /** Leave group */
+  leaveGroup: async (data: LeaveGroupRequest) => {
     const payload = {
       user_id: data.user_id,
       group_id: data.group_id,
@@ -335,35 +248,48 @@ export const groupApi = {
     };
 
     try {
-      const response = await api.post<LeaveGroupResponse>("/groups/members/remove", payload);
-      return response.data;
-    } catch (error: any) {
-      console.error("Error leaving group:", error);
-      console.error("Request payload:", payload);
-      console.error("Error details:", error.response?.data);
-      throw error;
+      const res = await api.post("/groups/members/remove", payload);
+      return res.data;
+    } catch (err: any) {
+      console.error("❌ Leave group error:", err.response?.data);
+      throw err;
     }
   },
 
-  deleteGroup: async (data: DeleteGroupRequest): Promise<DeleteGroupResponse> => {
-    const { group_id, requested_by, reason } = data;
+  /** Update member role */
+  updateMemberRole: async (data: UpdateMemberRoleRequest) => {
     const payload = {
-      reason,
-      requested_by,
-      target_group_id: group_id,
+      user_id: data.user_id,
+      group_id: data.group_id,
+      target_user_id: data.target_user_id,
+      role: data.role,
     };
 
     try {
-      const response = await api.delete<DeleteGroupResponse>(`/admin/groups/${group_id}/delete`, {
+      const res = await api.put("/groups/members/role", payload);
+      return res.data;
+    } catch (err: any) {
+      console.error("❌ Update role error:", err.response?.data);
+      throw err;
+    }
+  },
+
+  /** Delete group */
+  deleteGroup: async (data: DeleteGroupRequest) => {
+    const payload = {
+      reason: data.reason,
+      requested_by: data.requested_by,
+      target_group_id: data.group_id,
+    };
+
+    try {
+      const res = await api.delete(`/admin/groups/${data.group_id}/delete`, {
         data: payload,
       });
-      return response.data;
-    } catch (error: any) {
-      console.error("Error deleting group:", error);
-      console.error("Request payload:", payload);
-      console.error("Error details:", error.response?.data);
-      throw error;
+      return res.data;
+    } catch (err: any) {
+      console.error("❌ Delete group error:", err.response?.data);
+      throw err;
     }
   },
 };
-
