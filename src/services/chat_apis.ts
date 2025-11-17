@@ -26,28 +26,40 @@ export interface GroupAttachment {
   createdAt: string;
 }
 
+/** Normalize and extract group file attachments */
 const normalizeGroupAttachments = (messages: RawChatMessage[]): GroupAttachment[] => {
   return messages
-    .filter((message) => Boolean(message.file_url) && !message.is_deleted)
-    .map((message) => {
-      const fileName = message.file_name ?? message.file_url?.split("/").pop() ?? "Unknown file";
-      const fileType = message.file_type ?? fileName.split(".").pop() ?? "unknown";
+    .filter(msg => msg.file_url && !msg.is_deleted)
+    .map(msg => {
+      const fallbackName = msg.file_url?.split("/").pop() || "unknown_file";
+
+      const fileName = msg.file_name || fallbackName;
+      const fileType =
+        msg.file_type ||
+        fileName.split(".").pop() ||
+        "unknown";
 
       return {
-        id: message.id,
-        senderId: message.sender_id,
-        groupId: message.group_id ?? "",
-        fileUrl: message.file_url ?? "",
+        id: msg.id,
+        senderId: msg.sender_id,
+        groupId: msg.group_id ?? "",
+        fileUrl: msg.file_url!,
         fileName,
         fileType: fileType.toLowerCase(),
-        createdAt: message.timestamp,
+        createdAt: msg.timestamp,
       };
     });
 };
 
 export const chatApi = {
+  /** Fetch group files / media */
   async getGroupAttachments(groupId: string): Promise<GroupAttachment[]> {
-    const response = await api.get<RawChatMessage[]>(`/chat/groups/${groupId}/messages`);
-    return normalizeGroupAttachments(response.data ?? []);
+    try {
+      const res = await api.get<RawChatMessage[]>(`/chat/groups/${groupId}/messages`);
+      return normalizeGroupAttachments(res.data ?? []);
+    } catch (error) {
+      console.error("❌ Failed to load group attachments:", error);
+      return [];
+    }
   },
 };

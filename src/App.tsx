@@ -38,6 +38,7 @@ const App = () => (
               <Route path="/app" element={<AppLayout />}>
                 <Route index element={<Navigate to="chats" replace />} />
                 <Route path="chats" element={<Chats />} />
+                <Route path="chats/:chatId" element={<Chats />} />
                 <Route path="chats/:chatId/info" element={<ChatInfo />} />
                 <Route path="groups" element={<Groups />} />
                 <Route path="groups/:groupId/info" element={<GroupInfo />} />
