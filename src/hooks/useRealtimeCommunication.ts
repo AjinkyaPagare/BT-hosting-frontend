@@ -526,10 +526,11 @@ export const useRealtimeCommunication = (
 
     // Accept call
     const acceptCall = useCallback(
-        async (callType: CallType = 'video') => {
+        async (callType?: CallType) => {
             if (!incomingCall) return;
 
             const callId = incomingCall.callId;
+            const resolvedCallType = callType ?? incomingCall.callType;
 
             const cleanup = () => {
                 peerConnectionRef.current?.close();
@@ -548,37 +549,12 @@ export const useRealtimeCommunication = (
                 });
             };
 
+            let canProceed = false;
+            let detailMessage: string | undefined;
+
             try {
                 await videoCallsApi.acceptCall(callId);
-
-                setCallState((prev) => ({
-                    ...prev,
-                    callId,
-                    callType,
-                    status: 'connected',
-                    remoteUser: incomingCall.fromUser,
-                    isInitiator: false,
-                }));
-
-                initializePeerConnection();
-
-                wsRef.current?.send(
-                    JSON.stringify({
-                        type: 'accept_call',
-                        payload: {
-                            call_id: callId,
-                            call_type: callType,
-                        },
-                    })
-                );
-
-                try {
-                    await startLocalMedia(callType === 'audio');
-                } catch (mediaErr) {
-                    console.warn('Local media setup failed during acceptCall, continuing without local stream.', mediaErr);
-                }
-
-                setIncomingCall(null);
+                canProceed = true;
             } catch (err) {
                 const axiosError = err as AxiosError | undefined;
                 const statusCode = axiosError?.response?.status;
@@ -587,36 +563,90 @@ export const useRealtimeCommunication = (
                     typeof responseData === 'object' && responseData !== null
                         ? (('detail' in responseData ? (responseData as any).detail : responseData) as
                               | { call_id?: string; message?: string; status?: string }
+                              | string
                               | undefined)
                         : undefined;
 
-                if (statusCode === 409) {
-                    setError(detailPayload?.message ?? 'This call is no longer available to accept.');
-                } else if (statusCode === 404) {
-                    setError('Call not found or already ended.');
-                } else if (err instanceof DOMException) {
-                    // Already handled by startLocalMedia
-                } else if (err instanceof Error) {
-                    setError(err.message);
+                detailMessage =
+                    typeof detailPayload === 'string'
+                        ? detailPayload
+                        : detailPayload?.message ?? detailPayload?.status ?? undefined;
+
+                const alreadyAccepted =
+                    statusCode === 409 &&
+                    typeof detailMessage === 'string' &&
+                    detailMessage.toLowerCase().includes('status: callstatus.accepted');
+
+                if (alreadyAccepted) {
+                    canProceed = true;
                 } else {
-                    setError('Failed to accept call');
+                    if (statusCode === 409) {
+                        setError(detailMessage ?? 'This call is no longer available to accept.');
+                    } else if (statusCode === 404) {
+                        setError('Call not found or already ended.');
+                    } else if (err instanceof DOMException) {
+                        // Already handled by startLocalMedia
+                    } else if (err instanceof Error) {
+                        setError(err.message);
+                    } else {
+                        setError('Failed to accept call');
+                    }
+
+                    const targetCallId =
+                        (typeof detailPayload === 'object' && detailPayload && 'call_id' in detailPayload
+                            ? (detailPayload as { call_id?: string }).call_id
+                            : undefined) ?? callId;
+
+                    videoCallsApi.endCall(targetCallId).catch(() => undefined);
+                    if (wsRef.current?.readyState === WebSocket.OPEN) {
+                        wsRef.current.send(
+                            JSON.stringify({
+                                type: 'end_call',
+                                payload: { call_id: targetCallId },
+                            })
+                        );
+                    }
+
+                    setIncomingCall(null);
+                    cleanup();
+                    return;
                 }
-
-                const targetCallId = detailPayload?.call_id ?? callId;
-
-                videoCallsApi.endCall(targetCallId).catch(() => undefined);
-                if (wsRef.current?.readyState === WebSocket.OPEN) {
-                    wsRef.current.send(
-                        JSON.stringify({
-                            type: 'end_call',
-                            payload: { call_id: targetCallId },
-                        })
-                    );
-                }
-
-                setIncomingCall(null);
-                cleanup();
             }
+
+            if (!canProceed) {
+                return;
+            }
+
+            setCallState((prev) => ({
+                ...prev,
+                callId,
+                callType: resolvedCallType,
+                status: 'connected',
+                remoteUser: incomingCall.fromUser,
+                isInitiator: false,
+            }));
+
+            initializePeerConnection();
+
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(
+                    JSON.stringify({
+                        type: 'accept_call',
+                        payload: {
+                            call_id: callId,
+                            call_type: resolvedCallType,
+                        },
+                    })
+                );
+            }
+
+            try {
+                await startLocalMedia(resolvedCallType === 'audio');
+            } catch (mediaErr) {
+                console.warn('Local media setup failed during acceptCall, continuing without local stream.', mediaErr);
+            }
+
+            setIncomingCall(null);
         },
         [incomingCall, initializePeerConnection, startLocalMedia]
     );
@@ -659,24 +689,7 @@ export const useRealtimeCommunication = (
     }, [incomingCall]);
 
     // End call
-    const endCall = useCallback(() => {
-        const currentCallId = callState.callId;
-
-        if (currentCallId) {
-            videoCallsApi.endCall(currentCallId).catch((err) => {
-                console.error('Failed to end call via API:', err);
-            });
-
-            if (wsRef.current?.readyState === WebSocket.OPEN) {
-                wsRef.current.send(
-                    JSON.stringify({
-                        type: 'end_call',
-                        payload: { call_id: currentCallId },
-                    })
-                );
-            }
-        }
-
+    const performCleanup = useCallback((finalStatus: CallStatus = 'ended') => {
         peerConnectionRef.current?.close();
         peerConnectionRef.current = null;
 
@@ -689,14 +702,41 @@ export const useRealtimeCommunication = (
             prev.localStream?.getTracks().forEach((track) => track.stop());
             return {
                 ...prev,
-                status: 'ended',
+                status: finalStatus,
                 callId: null,
                 localStream: null,
                 remoteStream: null,
                 callDuration: 0,
+                isInitiator: false,
             };
         });
-    }, [callState.callId]);
+
+        setIncomingCall(null);
+    }, []);
+
+    const endCall = useCallback(
+        (overrideCallId?: string, finalStatus: CallStatus = 'ended') => {
+            const currentCallId = overrideCallId ?? callStateRef.current.callId ?? callState.callId;
+
+            if (currentCallId) {
+                videoCallsApi.endCall(currentCallId).catch((err) => {
+                    console.error('Failed to end call via API:', err);
+                });
+
+                if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(
+                        JSON.stringify({
+                            type: 'end_call',
+                            payload: { call_id: currentCallId },
+                        })
+                    );
+                }
+            }
+
+            performCleanup(finalStatus);
+        },
+        [performCleanup, callState.callId]
+    );
 
     // Toggle audio
     const toggleAudio = useCallback(() => {
