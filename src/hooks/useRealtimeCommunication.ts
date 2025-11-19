@@ -116,16 +116,25 @@ export const useRealtimeCommunication = (
         // Handle ICE candidates
         peerConnection.onicecandidate = (event) => {
             if (event.candidate) {
-                wsRef.current?.send(
-                    JSON.stringify({
-                        type: 'ice_candidate',
-                        payload: {
-                            candidate: event.candidate.candidate,
-                            sdpMLineIndex: event.candidate.sdpMLineIndex,
-                            sdpMid: event.candidate.sdpMid,
-                        },
-                    })
-                );
+                const activeCallId = callStateRef.current.callId;
+                if (!activeCallId) {
+                    console.warn('Skipping ICE candidate send: missing call ID');
+                    return;
+                }
+
+                if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(
+                        JSON.stringify({
+                            type: 'ice_candidate',
+                            payload: {
+                                call_id: activeCallId,
+                                candidate: event.candidate.candidate,
+                                sdpMLineIndex: event.candidate.sdpMLineIndex,
+                                sdpMid: event.candidate.sdpMid,
+                            },
+                        })
+                    );
+                }
             }
         };
 
@@ -204,15 +213,22 @@ export const useRealtimeCommunication = (
             const pc = peerConnectionRef.current;
             if (!pc) throw new Error('Peer connection not initialized');
 
+            const activeCallId = callStateRef.current.callId;
+            if (!activeCallId) {
+                throw new Error('Missing call ID for offer');
+            }
+
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-            wsRef.current?.send(
-                JSON.stringify({
-                    type: 'offer',
-                    payload: { sdp: offer.sdp, type: offer.type },
-                })
-            );
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(
+                    JSON.stringify({
+                        type: 'offer',
+                        payload: { call_id: activeCallId, sdp: offer.sdp, type: offer.type },
+                    })
+                );
+            }
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : 'Failed to create offer';
             setError(errorMsg);
@@ -225,17 +241,24 @@ export const useRealtimeCommunication = (
             const pc = peerConnectionRef.current;
             if (!pc) throw new Error('Peer connection not initialized');
 
+            const activeCallId = callStateRef.current.callId;
+            if (!activeCallId) {
+                throw new Error('Missing call ID for answer');
+            }
+
             await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: offerSdp }));
 
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
 
-            wsRef.current?.send(
-                JSON.stringify({
-                    type: 'answer',
-                    payload: { sdp: answer.sdp, type: answer.type },
-                })
-            );
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(
+                    JSON.stringify({
+                        type: 'answer',
+                        payload: { call_id: activeCallId, sdp: answer.sdp, type: answer.type },
+                    })
+                );
+            }
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : 'Failed to create answer';
             setError(errorMsg);
@@ -317,7 +340,9 @@ export const useRealtimeCommunication = (
                         status: 'connected',
                         callId: message.payload?.call_id ?? prev.callId,
                     }));
-                    initializePeerConnection();
+                    if (!peerConnectionRef.current) {
+                        initializePeerConnection();
+                    }
                     if (!callStateRef.current.localStream) {
                         startLocalMedia(callStateRef.current.callType === 'audio').catch(handleMediaAccessError);
                     }
@@ -338,14 +363,26 @@ export const useRealtimeCommunication = (
                     break;
 
                 case 'offer':
+                    if (!message.payload?.call_id || message.payload.call_id !== callStateRef.current.callId) {
+                        console.warn('Ignoring offer for non-active call', message.payload?.call_id);
+                        break;
+                    }
                     createAnswer(message.payload.sdp);
                     break;
 
                 case 'answer':
+                    if (!message.payload?.call_id || message.payload.call_id !== callStateRef.current.callId) {
+                        console.warn('Ignoring answer for non-active call', message.payload?.call_id);
+                        break;
+                    }
                     handleRemoteAnswer(message.payload.sdp);
                     break;
 
                 case 'ice_candidate':
+                    if (!message.payload?.call_id || message.payload.call_id !== callStateRef.current.callId) {
+                        console.warn('Ignoring ICE for non-active call', message.payload?.call_id);
+                        break;
+                    }
                     handleIceCandidate(message.payload);
                     break;
 

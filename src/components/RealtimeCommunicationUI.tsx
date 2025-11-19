@@ -339,22 +339,6 @@ export const RealtimeCommunicationUI: React.FC<RealtimeCommunicationUIProps> = (
                                 </div>
                                 <h3 className="relative mt-6 text-3xl font-semibold">{remoteUser?.name}</h3>
                                 <p className="relative text-lg text-slate-300">{statusMessage}</p>
-                                {status === 'connected' && (
-                                    <div className="relative mt-10 flex items-center gap-10 text-slate-300">
-                                        <div className="flex flex-col items-center">
-                                            <span className="text-xs uppercase tracking-[0.3em]">Mic</span>
-                                            <div className={`mt-3 flex h-12 w-12 items-center justify-center rounded-full ${isAudio ? 'bg-emerald-500/90' : 'bg-rose-500/90'}`}>
-                                                {isAudio ? <Mic size={22} /> : <MicOff size={22} />}
-                                            </div>
-                                        </div>
-                                        <div className="flex flex-col items-center">
-                                            <span className="text-xs uppercase tracking-[0.3em]">Mode</span>
-                                            <div className="mt-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-700/60">
-                                                <CallIcon size={22} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
                             </div>
                         )}
                     </div>
