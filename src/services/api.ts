@@ -15,7 +15,7 @@ import axios, {
 /** PRODUCTION-SAFE API URL (set this in .env as VITE_API_BASE) */
 
 // In api.ts
-export const BASE_URL = import.meta.env.VITE_API_BASE || "http://localhost:7000";
+export const BASE_URL = import.meta.env.VITE_API_BASE || "https://c3f7b91ddbcb.ngrok-free.app";
 /** Optionally enable withCredentials via env (set VITE_API_WITH_CREDENTIALS=true) */
 
 const USE_CREDENTIALS = (import.meta.env.VITE_API_WITH_CREDENTIALS || "false") === "true";
