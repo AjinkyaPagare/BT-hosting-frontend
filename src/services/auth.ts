@@ -23,20 +23,20 @@ export interface SignupResponse {
 export type RefreshResponse = LoginResponse;
 
 export const loginUser = async (payload: LoginPayload): Promise<LoginResponse> => {
-  const { data } = await api.post<LoginResponse>("/login", payload);
+  const { data } = await api.post<LoginResponse>("/auth/login", payload);
   return data;
 };
 
 export const signupUser = async (payload: SignupPayload): Promise<SignupResponse> => {
-  const { data } = await api.post<SignupResponse>("/signup", payload);
+  const { data } = await api.post<SignupResponse>("/auth/signup", payload);
   return data;
 };
 
 export const refreshAuthTokens = async (refreshToken: string): Promise<RefreshResponse> => {
-  const { data } = await api.post<RefreshResponse>("/refresh", { refresh_token: refreshToken });
+  const { data } = await api.post<RefreshResponse>("/auth/refresh", { refresh_token: refreshToken });
   return data;
 };
 
 export const logoutUser = async (): Promise<void> => {
-  await api.post("/logout");
+  await api.post("/auth/logout");
 };

@@ -25,8 +25,15 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       return;
     }
 
-    const data = await fetchCurrentUser();
-    setUser(data);
+    try {
+      const data = await fetchCurrentUser();
+      setUser(data);
+    } catch (error: any) {
+      console.error("Failed to fetch current user:", error);
+      // Token might be invalid, clear it
+      tokenStorage.clearAuth();
+      setUser(null);
+    }
   }, []);
 
   const initialize = useCallback(async () => {

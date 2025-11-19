@@ -27,12 +27,14 @@ import ChatListItem from "@/components/ChatListItem";
 import MessageBubble from "@/components/MessageBubble";
 import { Chat, Message, FriendRequest as FriendRequestType, FriendListItem } from "@/types";
 import { useToast } from "@/hooks/use-toast";
+import { useRealtimeCommunication } from "@/hooks/useRealtimeCommunication";
 import { friendsService } from "@/services/friends";
-import api from "@/services/api";
+import api, { tokenStorage, ACCESS_TOKEN_KEY } from "@/services/api";
 import { useAuth } from "@/context/AuthContext";
 import { chatService, mapBackendToUi } from "@/services/chat";
 import { filesService } from "@/services/files";
 import { wsService } from "@/services/ws";
+import RealtimeCommunicationUI from "@/components/RealtimeCommunicationUI";
 
 type Friend = {
   id: string;
@@ -81,6 +83,61 @@ const Chats = () => {
   const initialScrollDoneRef = useRef(false);
   const isLoadingMoreRef = useRef(false);
 
+  // Video call state
+  const authToken = tokenStorage.get(ACCESS_TOKEN_KEY);
+
+  const {
+    callId,
+    callType,
+    status,
+    remoteStream,
+    localStream,
+    isAudio,
+    isVideo,
+    remoteUser,
+    callDuration,
+    isConnected,
+    error,
+    incomingCall,
+    startCall,
+    acceptCall,
+    declineCall,
+    endCall,
+    toggleAudio,
+    toggleVideo,
+  } = useRealtimeCommunication(authToken, user?.id ?? null, user?.name ?? null);
+  const [isCallInitiating, setIsCallInitiating] = useState(false);
+
+  const {
+    data: pendingRequests = [],
+    isLoading: isPendingLoading,
+    isFetching: isPendingFetching,
+    isError: isPendingError,
+  } = useQuery({
+    queryKey: ["friends", "pending"],
+    queryFn: friendsService.getPendingRequests,
+  });
+
+  const {
+    data: friendList = [],
+    isLoading: isFriendsLoading,
+    isFetching: isFriendsFetching,
+    isError: isFriendsError,
+  } = useQuery({
+    queryKey: ["friends", "list"],
+    queryFn: friendsService.getFriendList,
+  });
+
+  const {
+    data: sentRequests = [],
+    isLoading: isSentLoading,
+    isFetching: isSentFetching,
+    isError: isSentError,
+  } = useQuery({
+    queryKey: ["friends", "sent"],
+    queryFn: friendsService.getSentRequests,
+  });
+
   const selectChat = useCallback(
     (chatId: string | null, options: { replace?: boolean } = {}) => {
       if (chatId) {
@@ -91,6 +148,86 @@ const Chats = () => {
     },
     [navigate]
   );
+
+  const chats = useMemo<Chat[]>(
+    () =>
+      friendList.map((friend: FriendListItem) => ({
+        id: friend.id,
+        userId: friend.id,
+        user: {
+          id: friend.id,
+          name: friend.name ?? "Unknown",
+          email: friend.email ?? "",
+          isOnline: false,
+        },
+        unreadCount: 0,
+        isPinned: false,
+      })),
+    [friendList]
+  );
+
+  const selectedChat = useMemo(
+    () => chats.find((chat) => chat.id === selectedChatId) ?? null,
+    [chats, selectedChatId]
+  );
+
+  const handleStartVideoCall = useCallback(async () => {
+    if (!selectedChat?.user.id) {
+      toast({
+        title: "Error",
+        description: "No user selected",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsCallInitiating(true);
+    try {
+      await startCall(selectedChat.user.id, selectedChat.user.name, 'video');
+      toast({
+        title: "Video Call",
+        description: `Calling ${selectedChat.user.name}...`,
+      });
+    } catch (error) {
+      console.error('Error starting video call:', error);
+      toast({
+        title: "Error",
+        description: "Failed to start video call",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCallInitiating(false);
+    }
+  }, [selectedChat, startCall, toast]);
+
+  const handleStartAudioCall = useCallback(async () => {
+    if (!selectedChat?.user.id) {
+      toast({
+        title: "Error",
+        description: "No user selected",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsCallInitiating(true);
+    try {
+      await startCall(selectedChat.user.id, selectedChat.user.name, 'audio');
+      toast({
+        title: "Audio Call",
+        description: `Calling ${selectedChat.user.name}...`,
+      });
+    } catch (error) {
+      console.error('Error starting audio call:', error);
+      toast({
+        title: "Error",
+        description: "Failed to start audio call",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCallInitiating(false);
+    }
+  }, [selectedChat, startCall, toast]);
 
   const resetAttachment = () => {
     setPendingAttachment(null);
@@ -149,21 +286,21 @@ const Chats = () => {
 
     pendingDeleteTimers.current[message.id] = setTimeout(async () => {
       delete pendingDeleteTimers.current[message.id];
-    try {
-      await chatService.deleteDirectMessage(message.id);
+      try {
+        await chatService.deleteDirectMessage(message.id);
         setMessages((prev) => prev.filter((m) => m.id !== message.id));
-    } catch (error: any) {
-      console.error("Error deleting message:", error);
+      } catch (error: any) {
+        console.error("Error deleting message:", error);
         setMessages((prev) =>
           prev.map((m) => (m.id === message.id ? { ...m, isPendingDelete: false } : m))
         );
-      toast({
-        title: "Failed to delete",
-        description:
-          error?.response?.data?.detail || error?.message || "Could not delete the message",
-        variant: "destructive",
-      });
-    }
+        toast({
+          title: "Failed to delete",
+          description:
+            error?.response?.data?.detail || error?.message || "Could not delete the message",
+          variant: "destructive",
+        });
+      }
     }, DELETE_GRACE_MS);
   };
 
@@ -250,58 +387,6 @@ const Chats = () => {
       container.scrollTop = container.scrollHeight - container.clientHeight;
     }
   }, [displayedMessages.length, isTyping]);
-
-  const {
-    data: pendingRequests = [],
-    isLoading: isPendingLoading,
-    isFetching: isPendingFetching,
-    isError: isPendingError,
-  } = useQuery({
-    queryKey: ["friends", "pending"],
-    queryFn: friendsService.getPendingRequests,
-  });
-
-  const {
-    data: friendList = [],
-    isLoading: isFriendsLoading,
-    isFetching: isFriendsFetching,
-    isError: isFriendsError,
-  } = useQuery({
-    queryKey: ["friends", "list"],
-    queryFn: friendsService.getFriendList,
-  });
-
-  const {
-    data: sentRequests = [],
-    isLoading: isSentLoading,
-    isFetching: isSentFetching,
-    isError: isSentError,
-  } = useQuery({
-    queryKey: ["friends", "sent"],
-    queryFn: friendsService.getSentRequests,
-  });
-
-  const chats = useMemo<Chat[]>(
-    () =>
-      friendList.map((friend: FriendListItem) => ({
-        id: friend.id,
-        userId: friend.id,
-        user: {
-          id: friend.id,
-          name: friend.name ?? "Unknown",
-          email: friend.email ?? "",
-          isOnline: false,
-        },
-        unreadCount: 0,
-        isPinned: false,
-      })),
-    [friendList]
-  );
-
-  const selectedChat = useMemo(
-    () => chats.find((chat) => chat.id === selectedChatId) ?? null,
-    [chats, selectedChatId]
-  );
 
   useEffect(() => {
     const handleResize = () => setIsDesktop(window.innerWidth >= 768);
@@ -855,8 +940,8 @@ const Chats = () => {
                             {alreadyFriend
                               ? "Open chat"
                               : alreadyRequested
-                              ? "Requested"
-                              : "Send request"}
+                                ? "Requested"
+                                : "Send request"}
                           </Button>
                         </div>
                       );
@@ -877,7 +962,7 @@ const Chats = () => {
             onChange={setSearchQuery}
             selectedFilter={filter === "all" ? null : filter}
             onFilterChange={(next) =>
-              setFilter((next ? next : "all") as "all" | "unread" | "read")
+              setFilter((next || "all") as "all" | "unread" | "read")
             }
           />
         </div>
@@ -1027,10 +1112,22 @@ const Chats = () => {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleStartAudioCall}
+                disabled={isCallInitiating || status !== 'idle'}
+                title="Start audio call"
+              >
                 <Phone className="h-5 w-5" />
               </Button>
-              <Button variant="ghost" size="icon">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleStartVideoCall}
+                disabled={isCallInitiating || status !== 'idle'}
+                title="Start video call"
+              >
                 <Video className="h-5 w-5" />
               </Button>
               <Button
@@ -1135,8 +1232,8 @@ const Chats = () => {
                     editingMessageId
                       ? "Update your message..."
                       : pendingAttachment
-                      ? "Add a caption..."
-                      : "Type a message..."
+                        ? "Add a caption..."
+                        : "Type a message..."
                   }
                   value={messageInput}
                   onChange={(e) => setMessageInput(e.target.value)}
@@ -1174,8 +1271,56 @@ const Chats = () => {
           </div>
         </div>
       )}
+
+      {/* Real-time Communication UI */}
+      {incomingCall && (
+        <RealtimeCommunicationUI
+          callId={incomingCall.callId}
+          remoteUser={incomingCall.fromUser}
+          remoteStream={null}
+          localStream={null}
+          status="idle"
+          callType={incomingCall.callType}
+          isAudio={true}
+          isVideo={true}
+          callDuration={0}
+          isConnected={false}
+          error={null}
+          incomingCall={incomingCall}
+          onStartVideoCall={() => {}}
+          onStartAudioCall={() => {}}
+          onAcceptCall={acceptCall}
+          onDeclineCall={declineCall}
+          onEndCall={endCall}
+          onToggleAudio={toggleAudio}
+          onToggleVideo={toggleVideo}
+        />
+      )}
+      {status !== 'idle' && !incomingCall && (
+        <RealtimeCommunicationUI
+          callId={callId}
+          remoteUser={remoteUser}
+          remoteStream={remoteStream}
+          localStream={localStream}
+          status={status}
+          callType={callType}
+          isAudio={isAudio}
+          isVideo={isVideo}
+          callDuration={callDuration}
+          isConnected={isConnected}
+          error={error}
+          incomingCall={null}
+          onStartVideoCall={() => {}}
+          onStartAudioCall={() => {}}
+          onAcceptCall={acceptCall}
+          onDeclineCall={declineCall}
+          onEndCall={endCall}
+          onToggleAudio={toggleAudio}
+          onToggleVideo={toggleVideo}
+        />
+      )}
     </div>
   );
 };
- 
+
 export default Chats;

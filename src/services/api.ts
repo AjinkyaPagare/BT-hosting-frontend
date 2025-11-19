@@ -11,21 +11,21 @@ import axios, {
   type RawAxiosRequestHeaders
 
 } from "axios";
- 
+
 /** PRODUCTION-SAFE API URL (set this in .env as VITE_API_BASE) */
 
-export const BASE_URL = import.meta.env.VITE_API_BASE || "http://localhost:8000";
- 
+// In api.ts
+export const BASE_URL = import.meta.env.VITE_API_BASE || "http://localhost:7000";
 /** Optionally enable withCredentials via env (set VITE_API_WITH_CREDENTIALS=true) */
 
 const USE_CREDENTIALS = (import.meta.env.VITE_API_WITH_CREDENTIALS || "false") === "true";
- 
+
 export const ACCESS_TOKEN_KEY = "authToken";
 
 export const REFRESH_TOKEN_KEY = "refreshToken";
- 
+
 const isBrowser = typeof window !== "undefined";
- 
+
 export const tokenStorage = {
 
   get: (key: string): string | null => {
@@ -75,14 +75,14 @@ export const tokenStorage = {
   },
 
 };
- 
+
 /** Extend AxiosRequestConfig with retry flag */
 
 interface AuthenticatedRequestConfig extends AxiosRequestConfig {
 
   _retry?: boolean;
 }
- 
+
 /** Axios for API */
 
 const api = axios.create({
@@ -93,7 +93,7 @@ const api = axios.create({
     "ngrok-skip-browser-warning": "true",
   },
 });
- 
+
 /** Axios for refresh token */
 
 const refreshClient = axios.create({
@@ -104,7 +104,7 @@ const refreshClient = axios.create({
     "ngrok-skip-browser-warning": "true",
   },
 });
- 
+
 /** Helper to safely set Authorization header */
 
 function setAuthHeader(headers: AxiosRequestConfig["headers"], token: string) {
@@ -122,7 +122,7 @@ function setAuthHeader(headers: AxiosRequestConfig["headers"], token: string) {
   return newHeaders;
 
 }
- 
+
 /** Add authorization token to outgoing requests */
 
 api.interceptors.request.use((config) => {
@@ -146,7 +146,7 @@ api.interceptors.request.use((config) => {
   return config;
 
 });
- 
+
 /** Robust response interceptor with refresh-token handling */
 
 api.interceptors.response.use(
@@ -158,7 +158,7 @@ api.interceptors.response.use(
     const originalRequest = (error.config as AuthenticatedRequestConfig) || undefined;
 
     if (!originalRequest) return Promise.reject(error);
- 
+
     // Helper: get pathname from url (handles absolute and relative)
 
     const getPath = (url?: string | null) => {
@@ -180,23 +180,23 @@ api.interceptors.response.use(
       }
 
     };
- 
+
     const path = getPath(originalRequest.url);
 
-    const isAuthEndpoint = path.includes("/login") || path.includes("/signup") || path.includes("/auth");
+    const isAuthEndpoint = path.includes("/auth/login") || path.includes("/auth/signup") || path.includes("/auth");
 
-    const isRefreshEndpoint = path.includes("/refresh");
- 
+    const isRefreshEndpoint = path.includes("/auth/refresh");
+
     // Only attempt refresh on 401 and when we haven't retried yet
 
     if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint && !isRefreshEndpoint) {
 
       const refreshToken = tokenStorage.get(REFRESH_TOKEN_KEY);
- 
+
       if (refreshToken) {
 
         originalRequest._retry = true;
- 
+
         try {
 
           const resp = await refreshClient.post("/refresh", {
@@ -204,7 +204,7 @@ api.interceptors.response.use(
             refresh_token: refreshToken,
 
           });
- 
+
           const data = resp.data as {
 
             access_token?: string;
@@ -214,11 +214,11 @@ api.interceptors.response.use(
             [key: string]: any;
 
           };
- 
+
           const access_token = data.access_token || data.accessToken || data.token;
 
           const refresh_token = data.refresh_token || data.refreshToken;
- 
+
           if (!access_token) {
 
             // If refresh response doesn't contain token, fallthrough to logout
@@ -226,7 +226,7 @@ api.interceptors.response.use(
             throw new Error("No access token in refresh response");
 
           }
- 
+
           // save tokens (if provided)
 
           tokenStorage.set(ACCESS_TOKEN_KEY, access_token);
@@ -236,11 +236,11 @@ api.interceptors.response.use(
             tokenStorage.set(REFRESH_TOKEN_KEY, refresh_token);
 
           }
- 
+
           // update original request header and retry
 
           originalRequest.headers = setAuthHeader(originalRequest.headers, access_token);
- 
+
           return api(originalRequest);
 
         } catch (refreshError) {
@@ -252,7 +252,7 @@ api.interceptors.response.use(
         }
 
       }
- 
+
       // If we reach here, either no refresh token or refresh failed
 
       tokenStorage.clearAuth();
@@ -276,13 +276,98 @@ api.interceptors.response.use(
       }
 
     }
- 
+
     return Promise.reject(error);
 
   }
 
 );
- 
-export default api;
 
- 
+// ==================== Friend Requests ====================
+
+export const friendsApi = {
+  // Send friend request
+  sendRequest: (receiverId: string) =>
+    api.post('/friends/requests', { receiver_id: receiverId }),
+
+  // Get pending friend requests
+  getPendingRequests: () =>
+    api.get('/friends/requests/pending'),
+
+  // Get sent friend requests
+  getSentRequests: () =>
+    api.get('/friends/requests/sent'),
+
+  // Accept friend request
+  acceptRequest: (requestId: string) =>
+    api.post(`/friends/requests/${requestId}/accept`),
+
+  // Reject friend request
+  rejectRequest: (requestId: string) =>
+    api.post(`/friends/requests/${requestId}/reject`),
+
+  // Block user
+  blockUser: (requestId: string) =>
+    api.post(`/friends/requests/${requestId}/block`),
+
+  // Get friends list
+  getFriendsList: () =>
+    api.get('/friends/list'),
+
+  // Get blocked users list
+  getBlockedList: () =>
+    api.get('/friends/blocked'),
+};
+
+// ==================== Video Calls ====================
+
+export interface InitiateCallRequest {
+  receiver_id: string;
+  call_type: 'audio' | 'video';
+}
+
+export interface CallResponse {
+  id: string;
+  caller_id: string;
+  receiver_id: string;
+  call_type: 'audio' | 'video';
+  status: 'initiated' | 'ringing' | 'accepted' | 'declined' | 'ended' | 'missed';
+  duration_seconds?: number;
+  initiated_at: string;
+  answered_at?: string;
+  ended_at?: string;
+  is_missed: boolean;
+  is_rejected: boolean;
+}
+
+export const videoCallsApi = {
+  // Initiate a video/audio call
+  initiateCall: (data: InitiateCallRequest) =>
+    api.post('/calls/initiate', data),
+
+  // Get call details
+  getCallDetails: (callId: string) =>
+    api.get(`/calls/${callId}`),
+
+  // Accept incoming call
+  acceptCall: (callId: string) =>
+    api.post(`/calls/${callId}/accept`),
+
+  // Decline incoming call
+  declineCall: (callId: string) =>
+    api.post(`/calls/${callId}/decline`),
+
+  // End active call
+  endCall: (callId: string) =>
+    api.post(`/calls/${callId}/end`),
+
+  // Get call history
+  getCallHistory: (params?: { limit?: number; offset?: number }) =>
+    api.get('/calls/history', { params }),
+
+  // Record WebRTC stats (optional)
+  recordCallStats: (callId: string, stats: any) =>
+    api.post(`/calls/${callId}/stats`, stats),
+};
+
+export default api;

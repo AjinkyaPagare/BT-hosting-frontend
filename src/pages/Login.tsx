@@ -24,10 +24,14 @@ const Login = () => {
     setIsLoading(true);
 
     try {
+      console.log("Attempting login for:", email);
       const { access_token, refresh_token } = await loginUser({ email, password });
+      console.log("Login successful, tokens received");
+      
       tokenStorage.set(ACCESS_TOKEN_KEY, access_token);
       tokenStorage.set(REFRESH_TOKEN_KEY, refresh_token);
 
+      console.log("Tokens stored, refreshing user...");
       await refreshUser();
 
       toast({
@@ -36,10 +40,16 @@ const Login = () => {
       });
       navigate("/app/chats", { replace: true });
     } catch (error) {
+      console.error("Login error:", error);
       let description = "Unable to sign in. Please try again.";
 
       if (isAxiosError(error)) {
-        description = error.response?.data?.detail ?? description;
+        console.error("Axios error details:", {
+          status: error.response?.status,
+          data: error.response?.data,
+          message: error.message
+        });
+        description = error.response?.data?.detail ?? error.message ?? description;
       }
 
       toast({
